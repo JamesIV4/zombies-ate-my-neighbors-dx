@@ -1,1 +1,4 @@
 *.sfc
+mesen-*.txt
+__pycache__/
+*.pyc
