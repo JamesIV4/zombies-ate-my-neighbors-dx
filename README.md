@@ -15,34 +15,36 @@ reads it.
 
 ## Quick Start
 
-On Windows, double-click:
+Download and extract the Windows x64 release ZIP, then run:
 
 ```text
-Play ZAMN DX.cmd
+ZAMN-DX.exe
 ```
 
 The launcher will:
 
 1. Open a dedicated mod launcher before starting the emulator.
 2. Let you play, configure and test the controller, or quit.
-3. Verify and patch the source ROM without requiring Python.
-4. Download the latest official Windows BizHawk release on first run, after
-   asking permission.
-5. Start the patched game in a clean, chromeless full-screen window.
+3. Ask for your legally obtained USA ROM on the first play.
+4. Verify and patch the ROM without requiring Python or external tools.
+5. Start the bundled BizHawk runtime in a clean, chromeless full-screen window.
 
 If the source ROM is not beside the launcher, a file picker will ask for it.
-BizHawk is installed per-user under `%LOCALAPPDATA%\ZAMNDX\BizHawk`; no
-administrator access is needed. The launcher never downloads or distributes
-the game ROM itself.
+The generated patched ROM, controller profile, and Lua runtime configuration
+are stored under `%LOCALAPPDATA%\ZAMNDX`; no administrator access is needed.
+The release never downloads or distributes the game ROM itself.
 
 ## Requirements
 
+- 64-bit Windows.
 - The headerless USA ROM:
   `Zombies Ate My Neighbors (USA).sfc`
-- [BizHawk 2.11.1 or newer](https://github.com/TASEmulators/BizHawk/releases)
-  to run the analog controller layer. The launcher can install it.
-- An XInput-compatible dual-stick controller, or equivalent axes exposed by
-  BizHawk.
+- An XInput-compatible dual-stick controller.
+
+The release ZIP includes the self-contained launcher, .NET runtime, BizHawk
+2.11.1, the app-local Microsoft Visual C++ runtime, the IPS patch, and the Lua
+controller runtime. Players do not need to install an emulator, .NET,
+PowerShell, Python, the Visual C++ Redistributable, or any other dependency.
 
 The expected source ROM SHA-256 is:
 
@@ -50,10 +52,9 @@ The expected source ROM SHA-256 is:
 b27e2e957fa760f4f483e2af30e03062034a6c0066984f2e284cc2cb430b2059
 ```
 
-## Build
+## Development Build
 
-The launcher applies `dist/zamndx.ips` itself. Python 3 is only required for
-development or rebuilding the IPS:
+Python 3 is only required to rebuild the ROM patch:
 
 ```powershell
 python tools/build.py
@@ -67,6 +68,33 @@ This creates:
 The IPS file contains the hitbox changes, right-stick aim hook, and SNES
 checksum changes. Analog input is provided at runtime because an SNES ROM has
 no way to read a modern host controller's raw axes.
+
+Build the complete Windows release with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/build_release.ps1
+```
+
+The release builder downloads a portable official .NET SDK and the official
+BizHawk archive into the ignored `.tools` directory, publishes the
+self-contained EXE, copies the Visual C++ app-local runtime from an installed
+Visual Studio C++ workload, includes third-party license notices, and creates:
+
+```text
+dist/ZAMN-DX-Windows-x64-v1.0.0.zip
+```
+
+To Authenticode-sign the launcher with a certificate already installed in the
+current user's certificate store:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/build_release.ps1 `
+  -SigningCertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
+```
+
+Unsigned builds may still trigger Windows SmartScreen. The release includes
+`release-manifest.json` and `SHA256SUMS.txt` so artifacts can be independently
+verified.
 
 ## Run
 
@@ -87,12 +115,9 @@ BizHawk controller bindings are optional because the runtime reads the host
 controller directly. Normal BizHawk keyboard and controller bindings can
 remain enabled.
 
-If EmuHawk exits while starting its SNES core, launch it with `--gdi`. That
-renderer was required on the development machine:
-
-```powershell
-EmuHawk.exe --gdi --lua "path\to\mod\zamndx.lua" "path\to\dist\Zombies Ate My Neighbors DX.sfc"
-```
+The launcher uses a dedicated BizHawk configuration under
+`%LOCALAPPDATA%\ZAMNDX\BizHawk`. Its first-run onboarding and update prompt are
+disabled because controller setup and launching are handled by `ZAMN-DX.exe`.
 
 Default controls:
 
@@ -103,7 +128,7 @@ Default controls:
 BizHawk normally names XInput axes `X1 LeftThumbX Axis` and similar. Controllers
 in XInput slots X1 through X4 can be configured entirely through the launcher.
 The launcher stores the user profile under `%LOCALAPPDATA%\ZAMNDX` and
-generates `mod/zamndx-controller-config.lua` for the runtime.
+generates its Lua runtime profile there.
 
 The Lua runtime has no in-game overlay or configuration window. It releases
 all overrides at startup and only overrides controls that are actively mapped.

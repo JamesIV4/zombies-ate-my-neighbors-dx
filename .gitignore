@@ -3,3 +3,8 @@ mesen-*.txt
 __pycache__/
 *.pyc
 mod/zamndx-controller-config.lua
+.tools/
+launcher/**/bin/
+launcher/**/obj/
+dist/release/
+dist/ZAMN-DX-*.zip
