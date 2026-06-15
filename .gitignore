@@ -2,3 +2,4 @@
 mesen-*.txt
 __pycache__/
 *.pyc
+mod/zamndx-controller-config.lua

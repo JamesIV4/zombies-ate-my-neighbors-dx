@@ -13,13 +13,34 @@ inputs and writes the requested aim direction to reserved upper WRAM. A small
 ROM hook applies that direction immediately before the original firing logic
 reads it.
 
+## Quick Start
+
+On Windows, double-click:
+
+```text
+Play ZAMN DX.cmd
+```
+
+The launcher will:
+
+1. Verify and patch the source ROM without requiring Python.
+2. Download the latest official Windows BizHawk release on first run, after
+   asking permission.
+3. Start BizHawk with the patched ROM, analog controls, twin-stick aiming, and
+   the compatible GDI renderer.
+4. Open the controller setup and live-test window automatically.
+
+If the source ROM is not beside the launcher, a file picker will ask for it.
+BizHawk is installed per-user under `%LOCALAPPDATA%\ZAMNDX\BizHawk`; no
+administrator access is needed. The launcher never downloads or distributes
+the game ROM itself.
+
 ## Requirements
 
 - The headerless USA ROM:
   `Zombies Ate My Neighbors (USA).sfc`
-- Python 3 to build the patch.
 - [BizHawk 2.11.1 or newer](https://github.com/TASEmulators/BizHawk/releases)
-  to run the analog controller layer.
+  to run the analog controller layer. The launcher can install it.
 - An XInput-compatible dual-stick controller, or equivalent axes exposed by
   BizHawk.
 
@@ -31,7 +52,8 @@ b27e2e957fa760f4f483e2af30e03062034a6c0066984f2e284cc2cb430b2059
 
 ## Build
 
-From the repository root:
+The launcher applies `dist/zamndx.ips` itself. Python 3 is only required for
+development or rebuilding the IPS:
 
 ```powershell
 python tools/build.py
@@ -48,11 +70,23 @@ no way to read a modern host controller's raw axes.
 
 ## Run
 
-1. Open the patched ROM in BizHawk.
-2. Configure a normal SNES controller for player 1.
-3. Open `Tools > Lua Console`.
-4. Load `mod/zamndx.lua`.
-5. Move each analog stick once so the script can identify its axes.
+The launcher is the recommended way to run the mod. BizHawk controller
+bindings are optional because the controller layer reads the host controller
+directly. Normal BizHawk keyboard and controller bindings can remain enabled.
+
+In `ZAMN DX Controller Setup`:
+
+1. Select the host device. `X1` is the default for the first XInput controller.
+2. Move both sticks and press buttons. The live-test fields should update
+   immediately.
+3. Use `Capture` beside any axis or SNES button that needs a different binding.
+4. Click `Save` to reuse the configuration on future launches.
+
+`Release inputs` immediately clears every Lua input override. This is useful
+when testing mappings or recovering from a stale script instance.
+
+To run without the launcher, open the patched ROM in BizHawk, then load
+`mod/zamndx.lua` from `Tools > Lua Console`.
 
 If EmuHawk exits while starting its SNES core, launch it with `--gdi`. That
 renderer was required on the development machine:
@@ -67,10 +101,14 @@ Default controls:
 - Right stick: aim and continuously use the readied weapon.
 - D-pad and all original SNES buttons remain available.
 
-BizHawk normally names XInput axes `X1 LeftThumbX Axis` and similar. If a
-controller uses different names, edit the four axis overrides near the top of
-`mod/zamndx.lua`. Y-axis inversion defaults to BizHawk's SDL convention and is
-configurable there as well.
+BizHawk normally names XInput axes `X1 LeftThumbX Axis` and similar. Controllers
+with different names can be configured entirely through the setup window.
+Configuration is saved as `mod/zamndx-controller-config.lua`.
+
+If a previously running version left all controls unresponsive, close that
+BizHawk instance and relaunch through `Play ZAMN DX.cmd`. The current
+controller layer releases all overrides at startup and only overrides controls
+that are actively mapped.
 
 ## Technical Notes
 
