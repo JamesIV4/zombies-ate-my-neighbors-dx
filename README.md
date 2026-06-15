@@ -13,6 +13,10 @@ movement deltas and writes them, plus the requested aim direction, to reserved
 upper WRAM. Small ROM hooks apply movement before the original collision and
 coordinate commit logic, and aiming immediately before the firing logic.
 
+## Gameplay Video
+
+[![Zombies Ate My Neighbors DX](https://img.youtube.com/vi/F1pOwoPr5Lw/0.jpg)](https://www.youtube.com/watch?v=F1pOwoPr5Lw)
+
 ## Quick Start
 
 Download and extract the Windows x64 release ZIP, then run:
