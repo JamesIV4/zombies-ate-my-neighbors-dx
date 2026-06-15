@@ -23,12 +23,12 @@ Play ZAMN DX.cmd
 
 The launcher will:
 
-1. Verify and patch the source ROM without requiring Python.
-2. Download the latest official Windows BizHawk release on first run, after
+1. Open a dedicated mod launcher before starting the emulator.
+2. Let you play, configure and test the controller, or quit.
+3. Verify and patch the source ROM without requiring Python.
+4. Download the latest official Windows BizHawk release on first run, after
    asking permission.
-3. Start BizHawk with the patched ROM, analog controls, twin-stick aiming, and
-   the compatible GDI renderer.
-4. Open the controller setup and live-test window automatically.
+5. Start the patched game in a clean, chromeless full-screen window.
 
 If the source ROM is not beside the launcher, a file picker will ask for it.
 BizHawk is installed per-user under `%LOCALAPPDATA%\ZAMNDX\BizHawk`; no
@@ -70,23 +70,22 @@ no way to read a modern host controller's raw axes.
 
 ## Run
 
-The launcher is the recommended way to run the mod. BizHawk controller
-bindings are optional because the controller layer reads the host controller
-directly. Normal BizHawk keyboard and controller bindings can remain enabled.
+The launcher is the recommended way to run the mod. It opens before BizHawk
+and presents three actions:
 
-In `ZAMN DX Controller Setup`:
+- `Play Game` starts BizHawk in full screen and hides its Lua utility window.
+- `Configure Controller` opens controller selection, live testing, deadzone,
+  inversion, and input assignment.
+- `Quit` closes the launcher.
 
-1. Select the host device. `X1` is the default for the first XInput controller.
-2. Move both sticks and press buttons. The live-test fields should update
-   immediately.
-3. Use `Capture` beside any axis or SNES button that needs a different binding.
-4. Click `Save` to reuse the configuration on future launches.
+To assign an input, click `Capture`, release all controls, then press the
+desired button or move the desired stick axis. Capture is performed directly
+through Windows XInput rather than through the emulator. Click `Save` when
+finished.
 
-`Release inputs` immediately clears every Lua input override. This is useful
-when testing mappings or recovering from a stale script instance.
-
-To run without the launcher, open the patched ROM in BizHawk, then load
-`mod/zamndx.lua` from `Tools > Lua Console`.
+BizHawk controller bindings are optional because the runtime reads the host
+controller directly. Normal BizHawk keyboard and controller bindings can
+remain enabled.
 
 If EmuHawk exits while starting its SNES core, launch it with `--gdi`. That
 renderer was required on the development machine:
@@ -102,13 +101,12 @@ Default controls:
 - D-pad and all original SNES buttons remain available.
 
 BizHawk normally names XInput axes `X1 LeftThumbX Axis` and similar. Controllers
-with different names can be configured entirely through the setup window.
-Configuration is saved as `mod/zamndx-controller-config.lua`.
+in XInput slots X1 through X4 can be configured entirely through the launcher.
+The launcher stores the user profile under `%LOCALAPPDATA%\ZAMNDX` and
+generates `mod/zamndx-controller-config.lua` for the runtime.
 
-If a previously running version left all controls unresponsive, close that
-BizHawk instance and relaunch through `Play ZAMN DX.cmd`. The current
-controller layer releases all overrides at startup and only overrides controls
-that are actively mapped.
+The Lua runtime has no in-game overlay or configuration window. It releases
+all overrides at startup and only overrides controls that are actively mapped.
 
 ## Technical Notes
 
