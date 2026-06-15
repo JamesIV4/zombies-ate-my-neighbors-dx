@@ -56,7 +56,7 @@ internal sealed class ControllerForm : Form
         BackColor = Theme.Background;
         ForeColor = Theme.Text;
         Font = new Font("Segoe UI", 10);
-        Icon = Theme.CreateIcon();
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
 
         Controls.Add(Theme.Label("CONTROLLER SETUP", 28, 22, 340, 35, 20, Theme.Text, FontStyle.Bold));
         Controls.Add(Theme.Label(

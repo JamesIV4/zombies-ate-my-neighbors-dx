@@ -57,7 +57,7 @@ internal sealed class MainForm : Form
         BackColor = Theme.Background;
         ForeColor = Theme.Text;
         Font = new Font("Segoe UI", 10);
-        Icon = Theme.CreateIcon();
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
 
         Controls.Add(new Panel
         {

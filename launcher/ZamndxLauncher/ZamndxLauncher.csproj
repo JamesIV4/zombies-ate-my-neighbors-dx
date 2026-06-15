@@ -13,6 +13,7 @@
     <PublishTrimmed>false</PublishTrimmed>
     <DebugType>none</DebugType>
     <AssemblyName>ZAMN-DX</AssemblyName>
+    <ApplicationIcon>Assets\ZAMN-DX.ico</ApplicationIcon>
     <RootNamespace>ZamndxLauncher</RootNamespace>
     <Product>Zombies Ate My Neighbors DX</Product>
     <Description>Launcher and controller configuration for Zombies Ate My Neighbors DX.</Description>

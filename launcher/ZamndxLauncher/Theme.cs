@@ -1,5 +1,3 @@
-using System.Drawing.Drawing2D;
-
 namespace ZamndxLauncher;
 
 internal static class Theme
@@ -64,27 +62,5 @@ internal static class Theme
         button.MouseEnter += (_, _) => button.BackColor = hover;
         button.MouseLeave += (_, _) => button.BackColor = normal;
         return button;
-    }
-
-    internal static Icon CreateIcon()
-    {
-        using var bitmap = new Bitmap(64, 64);
-        using var graphics = Graphics.FromImage(bitmap);
-        graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        graphics.Clear(Background);
-
-        using var purple = new SolidBrush(Purple);
-        using var lime = new SolidBrush(Lime);
-        graphics.FillRectangle(purple, 0, 0, 8, 64);
-        graphics.FillEllipse(lime, 13, 12, 40, 40);
-
-        using var font = new Font("Segoe UI Black", 20, FontStyle.Bold);
-        using var textBrush = new SolidBrush(Background);
-        var text = "Zombies Ate My Neighbors DX";
-        var size = graphics.MeasureString(text, font);
-        graphics.DrawString(text, font, textBrush, 33 - size.Width / 2, 31 - size.Height / 2);
-
-        using var icon = Icon.FromHandle(bitmap.GetHicon());
-        return (Icon)icon.Clone();
     }
 }
