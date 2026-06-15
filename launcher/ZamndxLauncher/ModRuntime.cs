@@ -120,6 +120,8 @@ internal static class ModRuntime
         config["FirstBoot"] = false;
         config["SelectedProfile"] = 1;
         config["UpdateAutoCheckEnabled"] = false;
+        config["RunInBackground"] = true;
+        config["AcceptBackgroundInputControllerOnly"] = true;
         config["LastWrittenFrom"] = "2.11.1";
         config["LastWrittenFromDetailed"] = "Version 2.11.1";
 

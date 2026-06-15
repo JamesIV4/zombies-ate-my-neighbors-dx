@@ -30,6 +30,9 @@ Check(settings.Buttons["Y"] == "X", "settings clone isolation");
 ModRuntime.EnsureBizHawkConfig();
 var bizHawkConfig = File.ReadAllText(AppPaths.BizHawkConfigPath);
 Check(bizHawkConfig.Contains("\"FirstBoot\": false"), "BizHawk onboarding disabled");
+Check(
+    bizHawkConfig.Contains("\"AcceptBackgroundInputControllerOnly\": true"),
+    "BizHawk controller background input enabled");
 
 var temporaryDirectory = Path.Combine(Path.GetTempPath(), $"zamndx-tests-{Guid.NewGuid():N}");
 Directory.CreateDirectory(temporaryDirectory);
