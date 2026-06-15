@@ -69,7 +69,7 @@ The IPS file contains the hitbox changes, analog movement hook, right-stick
 aim hook, and SNES checksum changes. Raw analog input is provided at runtime
 because an SNES ROM has no way to read a modern host controller's axes.
 
-Build the complete Windows release with:
+Build the complete unsigned Windows release with:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/build_release.ps1
@@ -84,24 +84,46 @@ Visual Studio C++ workload, includes third-party license notices, and creates:
 dist/ZAMN-DX-Windows-x64-v1.0.0.zip
 ```
 
-To Authenticode-sign the launcher with a certificate already installed in the
-current user's certificate store:
+### Signed Releases
+
+The signed-release workflow rebuilds the IPS patch and C# launcher, runs the
+launcher tests, publishes the self-contained EXE, Authenticode-signs and
+verifies it, then creates the ZIP and a `.sha256` checksum file.
+
+Configure a trusted code-signing PFX once:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/build_release.ps1 `
-  -SigningCertificateThumbprint YOUR_CERTIFICATE_THUMBPRINT
+.\setup-signing.ps1 -PfxPath "C:\path\certificate.pfx"
 ```
 
-Unsigned builds may still trigger Windows SmartScreen. The release includes
-`release-manifest.json` and `SHA256SUMS.txt` so artifacts can be independently
-verified.
+The PFX password is requested interactively and is never saved. Only the
+installed certificate's public thumbprint is stored under the ignored
+`.tools` directory.
+
+Create future signed releases with one command:
+
+```powershell
+.\build-signed-release.ps1 -Version 1.0.1
+```
+
+The script refuses to emit a signed release if the certificate is missing,
+expired, lacks its private key, the timestamp fails, or Authenticode
+verification fails. Timestamping is bounded to two minutes by default, so a
+timestamp service outage cannot hang the build indefinitely. The release
+includes `release-manifest.json`,
+`SHA256SUMS.txt`, and a checksum beside the final ZIP.
+
+Unsigned builds may still trigger Windows SmartScreen. Authenticode signing
+requires a trusted certificate issued for code signing; a self-signed
+certificate does not establish public trust.
 
 ## Run
 
 The launcher is the recommended way to run the mod. It opens before BizHawk
 and presents three actions:
 
-- `Play Game` starts BizHawk in full screen and hides its Lua utility window.
+- `Play Game` starts BizHawk in full screen, hides its Lua utility window, and
+  transfers controller focus to the game automatically.
 - `Configure Controller` opens controller selection, live testing, deadzone,
   inversion, and input assignment.
 - `Quit` closes the launcher.

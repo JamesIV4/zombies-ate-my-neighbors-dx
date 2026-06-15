@@ -4,6 +4,10 @@ param(
     [string]$BizHawkVersion = "2.11.1",
     [string]$VcRuntimeDirectory,
     [string]$SigningCertificateThumbprint,
+    [string]$TimestampServer = "http://timestamp.digicert.com",
+    [int]$SigningTimeoutSeconds = 120,
+    [switch]$RequireSignature,
+    [switch]$SkipTimestamp,
     [switch]$SkipDownload
 )
 
@@ -22,9 +26,37 @@ $TestProject = Join-Path $Root "launcher\ZamndxLauncher.Tests\ZamndxLauncher.Tes
 $PublishDirectory = Join-Path $Root "launcher\ZamndxLauncher\bin\Release\net8.0-windows\win-x64\publish"
 $StageDirectory = Join-Path $Root "dist\release\ZAMN-DX-Windows-x64"
 $ZipPath = Join-Path $Root "dist\ZAMN-DX-Windows-x64-v$Version.zip"
+$ZipChecksumPath = "$ZipPath.sha256"
+$RomBuildScript = Join-Path $Root "tools\build.py"
+$SourceRom = Join-Path $Root "Zombies Ate My Neighbors (USA).sfc"
+$PatchedRom = Join-Path $Root "dist\Zombies Ate My Neighbors DX.sfc"
+$IpsPatch = Join-Path $Root "dist\zamndx.ips"
 
 [System.IO.Directory]::CreateDirectory($ToolsDirectory) | Out-Null
 [System.IO.Directory]::CreateDirectory($DownloadsDirectory) | Out-Null
+
+if (-not (Test-Path -LiteralPath $SourceRom)) {
+    throw @"
+The source ROM is required to rebuild the IPS patch:
+
+  $SourceRom
+"@
+}
+
+$python = Get-Command python -ErrorAction SilentlyContinue
+if ($null -eq $python) {
+    throw "Python 3 is required to rebuild the ROM patch."
+}
+
+Write-Host "Rebuilding ROM patch..."
+& $python.Source $RomBuildScript `
+    $SourceRom `
+    --output $PatchedRom `
+    --ips $IpsPatch
+if ($LASTEXITCODE -ne 0) {
+    throw "The ROM patch build failed."
+}
+$PatchedRomHash = (Get-FileHash -LiteralPath $PatchedRom -Algorithm SHA256).Hash
 
 if (-not (Test-Path -LiteralPath $Dotnet)) {
     if ($SkipDownload) {
@@ -52,17 +84,28 @@ if (-not (Test-Path -LiteralPath $BizHawkZip)) {
     Invoke-WebRequest $uri -OutFile $BizHawkZip
 }
 
-& $Dotnet run --project $TestProject -c Release
-if ($LASTEXITCODE -ne 0) {
-    throw "The launcher tests failed."
+Write-Host "Running launcher tests..."
+try {
+    $env:ZAMNDX_EXPECTED_PATCHED_ROM_HASH = $PatchedRomHash
+    & $Dotnet run `
+        --project $TestProject `
+        -c Release `
+        "-p:ExpectedPatchedRomHash=$PatchedRomHash"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The launcher tests failed."
+    }
+} finally {
+    Remove-Item Env:\ZAMNDX_EXPECTED_PATCHED_ROM_HASH -ErrorAction SilentlyContinue
 }
 
+Write-Host "Publishing self-contained C# launcher..."
 & $Dotnet publish $Project `
     -c Release `
     -r win-x64 `
     --self-contained true `
     -p:Version=$Version `
-    -p:PublishSingleFile=true
+    -p:PublishSingleFile=true `
+    "-p:ExpectedPatchedRomHash=$PatchedRomHash"
 if ($LASTEXITCODE -ne 0) {
     throw "The launcher publish failed."
 }
@@ -82,17 +125,69 @@ Copy-Item -LiteralPath (Join-Path $Root "README.md") -Destination (Join-Path $St
 
 $stagedLauncher = Join-Path $StageDirectory "ZAMN-DX.exe"
 $signatureStatus = "NotSigned"
+$signingCertificate = $null
+if ($RequireSignature -and [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)) {
+    throw "A code-signing certificate is required for this release."
+}
 if (-not [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)) {
-    $certificate = Get-ChildItem "Cert:\CurrentUser\My\$SigningCertificateThumbprint" -ErrorAction Stop
-    $signature = Set-AuthenticodeSignature `
-        -FilePath $stagedLauncher `
-        -Certificate $certificate `
-        -TimestampServer "http://timestamp.digicert.com" `
-        -HashAlgorithm SHA256
-    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-        throw "Authenticode signing failed: $($signature.StatusMessage)"
+    $SigningCertificateThumbprint = $SigningCertificateThumbprint.Replace(" ", "").ToUpperInvariant()
+    $signingCertificate = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+        Where-Object {
+            $_.Thumbprint -eq $SigningCertificateThumbprint -and
+            $_.HasPrivateKey -and
+            $_.NotBefore -le (Get-Date) -and
+            $_.NotAfter -gt (Get-Date)
+        } |
+        Select-Object -First 1
+    if ($null -eq $signingCertificate) {
+        throw "The configured code-signing certificate is missing, expired, or has no private key."
     }
-    $signatureStatus = $signature.Status.ToString()
+
+    Write-Host "Signing launcher with $($signingCertificate.Subject)..."
+    $signingJob = Start-Job -ScriptBlock {
+        param($FilePath, $Thumbprint, $TimestampUrl, $WithoutTimestamp)
+
+        $certificate = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+            Where-Object Thumbprint -eq $Thumbprint |
+            Select-Object -First 1
+        if ($null -eq $certificate) {
+            throw "The signing worker could not load the configured certificate."
+        }
+
+        $parameters = @{
+            FilePath = $FilePath
+            Certificate = $certificate
+            IncludeChain = "All"
+            HashAlgorithm = "SHA256"
+        }
+        if (-not $WithoutTimestamp) {
+            $parameters.TimestampServer = $TimestampUrl
+        }
+        $signature = Set-AuthenticodeSignature @parameters
+        if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Authenticode signing failed: $($signature.StatusMessage)"
+        }
+    } -ArgumentList $stagedLauncher, $SigningCertificateThumbprint, $TimestampServer, $SkipTimestamp.IsPresent
+
+    try {
+        if ($null -eq (Wait-Job -Job $signingJob -Timeout $SigningTimeoutSeconds)) {
+            Stop-Job -Job $signingJob
+            throw "Authenticode signing timed out after $SigningTimeoutSeconds seconds."
+        }
+        Receive-Job -Job $signingJob -ErrorAction Stop
+        if ($signingJob.State -ne "Completed") {
+            throw "Authenticode signing failed in the signing worker."
+        }
+    } finally {
+        Remove-Job -Job $signingJob -Force -ErrorAction SilentlyContinue
+    }
+
+    $verifiedSignature = Get-AuthenticodeSignature -LiteralPath $stagedLauncher
+    if ($verifiedSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $verifiedSignature.SignerCertificate.Thumbprint -ne $SigningCertificateThumbprint) {
+        throw "The signed launcher failed Authenticode verification."
+    }
+    $signatureStatus = $verifiedSignature.Status.ToString()
 }
 
 Expand-Archive -LiteralPath $BizHawkZip -DestinationPath (Join-Path $StageDirectory "runtime\BizHawk") -Force
@@ -184,6 +279,10 @@ $manifest = [ordered]@{
     architecture = "win-x64"
     launcher_sha256 = (Get-FileHash -LiteralPath $stagedLauncher -Algorithm SHA256).Hash
     launcher_signature = $signatureStatus
+    signing_certificate_thumbprint = if ($null -ne $signingCertificate) { $signingCertificate.Thumbprint } else { $null }
+    signing_certificate_subject = if ($null -ne $signingCertificate) { $signingCertificate.Subject } else { $null }
+    signing_certificate_expires = if ($null -ne $signingCertificate) { $signingCertificate.NotAfter.ToUniversalTime().ToString("o") } else { $null }
+    timestamp_server = if ($null -ne $signingCertificate -and -not $SkipTimestamp) { $TimestampServer } else { $null }
     patch_sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\zamndx.ips") -Algorithm SHA256).Hash
     lua_sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\zamndx.lua") -Algorithm SHA256).Hash
     bizhawk_version = $BizHawkVersion
@@ -202,7 +301,7 @@ $manifest = [ordered]@{
     )
     dotnet_sdk_version = $DotnetVersion
     expected_source_rom_sha256 = "B27E2E957FA760F4F483E2AF30E03062034A6C0066984F2E284CC2CB430B2059"
-    expected_patched_rom_sha256 = "7F5D5D818AA4C68BD05367A95A5F2950F354A310648CF1585D06529A0BEFA8D5"
+    expected_patched_rom_sha256 = $PatchedRomHash
     generated_utc = [DateTime]::UtcNow.ToString("o")
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $StageDirectory "release-manifest.json") -Encoding UTF8
@@ -217,10 +316,16 @@ $checksums | Set-Content -LiteralPath (Join-Path $StageDirectory "SHA256SUMS.txt
 if (Test-Path -LiteralPath $ZipPath) {
     Remove-Item -LiteralPath $ZipPath -Force
 }
+if (Test-Path -LiteralPath $ZipChecksumPath) {
+    Remove-Item -LiteralPath $ZipChecksumPath -Force
+}
 Compress-Archive -LiteralPath $StageDirectory -DestinationPath $ZipPath -CompressionLevel Optimal
 
 $zip = Get-Item -LiteralPath $ZipPath
 $hash = Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256
+"$($hash.Hash)  $($zip.Name)" | Set-Content -LiteralPath $ZipChecksumPath -Encoding ASCII
 Write-Host "Release: $($zip.FullName)"
 Write-Host "Size: $([Math]::Round($zip.Length / 1MB, 1)) MiB"
 Write-Host "SHA-256: $($hash.Hash)"
+Write-Host "Checksum: $ZipChecksumPath"
+Write-Host "Launcher signature: $signatureStatus"

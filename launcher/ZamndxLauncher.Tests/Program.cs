@@ -1,4 +1,5 @@
 using ZamndxLauncher;
+using System.Reflection;
 
 var failures = new List<string>();
 
@@ -27,12 +28,39 @@ var clone = settings.Clone();
 clone.Buttons["Y"] = "B";
 Check(settings.Buttons["Y"] == "X", "settings clone isolation");
 
+var patchedRomHash = typeof(ModRuntime).Assembly
+    .GetCustomAttributes<AssemblyMetadataAttribute>()
+    .SingleOrDefault(attribute => attribute.Key == "ExpectedPatchedRomHash")
+    ?.Value;
+Check(
+    patchedRomHash is not null
+        && patchedRomHash.Length == 64
+        && patchedRomHash.All(Uri.IsHexDigit),
+    "patched ROM hash build metadata");
+var expectedPatchedRomHash = Environment.GetEnvironmentVariable(
+    "ZAMNDX_EXPECTED_PATCHED_ROM_HASH");
+if (!string.IsNullOrWhiteSpace(expectedPatchedRomHash))
+{
+    Check(
+        patchedRomHash == expectedPatchedRomHash,
+        "patched ROM hash MSBuild injection");
+}
+
 ModRuntime.EnsureBizHawkConfig();
 var bizHawkConfig = File.ReadAllText(AppPaths.BizHawkConfigPath);
 Check(bizHawkConfig.Contains("\"FirstBoot\": false"), "BizHawk onboarding disabled");
 Check(
     bizHawkConfig.Contains("\"AcceptBackgroundInputControllerOnly\": true"),
     "BizHawk controller background input enabled");
+Check(
+    bizHawkConfig.Contains("\"FloatingWindow\": false"),
+    "BizHawk Lua console attached to main window");
+Check(
+    bizHawkConfig.Contains("\"TopMost\": false"),
+    "BizHawk Lua console topmost disabled");
+Check(WindowTools.IsLuaConsoleTitle("Lua Console"), "Lua console title detection");
+Check(WindowTools.IsLuaConsoleTitle("lua console"), "Lua console title detection case");
+Check(!WindowTools.IsLuaConsoleTitle("Zombies Ate My Neighbors"), "game window title detection");
 
 var temporaryDirectory = Path.Combine(Path.GetTempPath(), $"zamndx-tests-{Guid.NewGuid():N}");
 Directory.CreateDirectory(temporaryDirectory);

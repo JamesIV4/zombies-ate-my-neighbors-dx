@@ -8,3 +8,4 @@ launcher/**/bin/
 launcher/**/obj/
 dist/release/
 dist/ZAMN-DX-*.zip
+dist/ZAMN-DX-*.zip.sha256

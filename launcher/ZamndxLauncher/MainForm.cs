@@ -141,9 +141,13 @@ internal sealed class MainForm : Form
             var process = ModRuntime.StartGame();
             Hide();
 
+            await WindowTools.CoordinateGameStartupAsync(
+                process,
+                TimeSpan.FromSeconds(30));
+
             while (!process.HasExited)
             {
-                WindowTools.HideWindow(process.Id, "Lua Console");
+                WindowTools.HideLuaConsoles(process.Id);
                 await Task.Delay(200);
             }
 

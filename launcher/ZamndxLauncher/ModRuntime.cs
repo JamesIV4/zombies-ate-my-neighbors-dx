@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -10,7 +11,21 @@ namespace ZamndxLauncher;
 internal static class ModRuntime
 {
     private const string ExpectedSourceHash = "B27E2E957FA760F4F483E2AF30E03062034A6C0066984F2E284CC2CB430B2059";
-    private const string ExpectedPatchedHash = "7F5D5D818AA4C68BD05367A95A5F2950F354A310648CF1585D06529A0BEFA8D5";
+    private static readonly string ExpectedPatchedHash = ReadExpectedPatchedHash();
+
+    private static string ReadExpectedPatchedHash()
+    {
+        var value = typeof(ModRuntime).Assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .SingleOrDefault(attribute => attribute.Key == "ExpectedPatchedRomHash")
+            ?.Value;
+        if (string.IsNullOrWhiteSpace(value) || value.Length != 64)
+        {
+            throw new InvalidOperationException(
+                "The launcher was built without a valid patched ROM hash.");
+        }
+        return value.ToUpperInvariant();
+    }
 
     internal static void Prepare(ControllerSettings settings, IWin32Window owner)
     {
@@ -124,6 +139,18 @@ internal static class ModRuntime
         config["AcceptBackgroundInputControllerOnly"] = true;
         config["LastWrittenFrom"] = "2.11.1";
         config["LastWrittenFromDetailed"] = "Version 2.11.1";
+
+        var commonToolSettings = config["CommonToolSettings"] as JsonObject
+            ?? new JsonObject();
+        config["CommonToolSettings"] = commonToolSettings;
+        var luaConsoleSettings =
+            commonToolSettings["BizHawk.Client.EmuHawk.LuaConsole"] as JsonObject
+            ?? new JsonObject();
+        commonToolSettings["BizHawk.Client.EmuHawk.LuaConsole"] =
+            luaConsoleSettings;
+        luaConsoleSettings["TopMost"] = false;
+        luaConsoleSettings["FloatingWindow"] = false;
+        luaConsoleSettings["AutoLoad"] = false;
 
         File.WriteAllText(
             AppPaths.BizHawkConfigPath,
