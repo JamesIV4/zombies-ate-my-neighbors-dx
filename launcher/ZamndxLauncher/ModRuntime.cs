@@ -10,7 +10,7 @@ namespace ZamndxLauncher;
 internal static class ModRuntime
 {
     private const string ExpectedSourceHash = "B27E2E957FA760F4F483E2AF30E03062034A6C0066984F2E284CC2CB430B2059";
-    private const string ExpectedPatchedHash = "4B544A574C3D3D41171CD4F96DBA32B3BC694EACC561ADAB33212A4958DDB85B";
+    private const string ExpectedPatchedHash = "7F5D5D818AA4C68BD05367A95A5F2950F354A310648CF1585D06529A0BEFA8D5";
 
     internal static void Prepare(ControllerSettings settings, IWin32Window owner)
     {
@@ -142,8 +142,8 @@ internal static class ModRuntime
         text.AppendLine("return {");
         text.AppendLine($"\tdevice = {Quote(settings.Device)},");
         text.AppendLine($"\tdeadzone = {settings.Deadzone.ToString(CultureInfo.InvariantCulture)},");
-        text.AppendLine($"\tinvert_left_y = {settings.InvertLeftY.ToString().ToLowerInvariant()},");
-        text.AppendLine($"\tinvert_right_y = {settings.InvertRightY.ToString().ToLowerInvariant()},");
+        text.AppendLine($"\tinvert_left_y = {(!settings.InvertLeftY).ToString().ToLowerInvariant()},");
+        text.AppendLine($"\tinvert_right_y = {(!settings.InvertRightY).ToString().ToLowerInvariant()},");
         text.AppendLine("\tenabled = true,");
         text.AppendLine("\tbuttons = {");
         foreach (var name in ControllerSettings.ButtonOrder)

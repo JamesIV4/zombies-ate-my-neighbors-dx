@@ -109,6 +109,8 @@ internal sealed class ControllerForm : Form
         };
         Controls.Add(_deadzone);
 
+        // The saved setting follows the user-facing checkbox. The runtime/Lua flag is
+        // opposite, so ModRuntime flips it when writing zamndx-controller-config.lua.
         _invertLeft = CheckBox("Invert left-stick Y", 532, 111, _settings.InvertLeftY);
         _invertRight = CheckBox("Invert right-stick Y", 690, 111, _settings.InvertRightY);
         _invertLeft.CheckedChanged += (_, _) => _settings.InvertLeftY = _invertLeft.Checked;

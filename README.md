@@ -7,11 +7,11 @@ This emulator-only mod for the USA SNES release adds:
 - Independent right-stick aiming and firing in the game's eight native shot
   directions.
 
-The ROM patch retains the original movement, wall collision, enemy, item, and
-weapon code. The controller layer translates analog input into native SNES
-inputs and writes the requested aim direction to reserved upper WRAM. A small
-ROM hook applies that direction immediately before the original firing logic
-reads it.
+The ROM patch retains the original wall collision, enemy, item, camera, tile,
+and weapon code. The controller layer translates analog input into per-frame
+movement deltas and writes them, plus the requested aim direction, to reserved
+upper WRAM. Small ROM hooks apply movement before the original collision and
+coordinate commit logic, and aiming immediately before the firing logic.
 
 ## Quick Start
 
@@ -65,9 +65,9 @@ This creates:
 - `dist/Zombies Ate My Neighbors DX.sfc`
 - `dist/zamndx.ips`
 
-The IPS file contains the hitbox changes, right-stick aim hook, and SNES
-checksum changes. Analog input is provided at runtime because an SNES ROM has
-no way to read a modern host controller's raw axes.
+The IPS file contains the hitbox changes, analog movement hook, right-stick
+aim hook, and SNES checksum changes. Raw analog input is provided at runtime
+because an SNES ROM has no way to read a modern host controller's axes.
 
 Build the complete Windows release with:
 
@@ -142,13 +142,16 @@ game's shared sprite collision path, so the larger bounds apply consistently
 to enemies, pickups, projectiles, and player contact. Tile and wall collision
 remain unchanged.
 
-The analog layer uses temporal interpolation between adjacent native movement
-directions. This preserves the game's collision response while allowing any
-left-stick angle and partial-stick speed. Right-stick shots are selected from
-the eight trajectories implemented by the original weapon engine; arbitrary
+The analog layer uses independent fractional accumulators for X and Y. It
+quantizes a constant-speed analog vector into small integer deltas, avoiding
+the original engine's incompatible cardinal and diagonal movement cadences.
+Those deltas enter the original tentative-position routine, so wall collision,
+the committed player position, camera tracking, tile streaming, and sprites
+all consume the same coordinates. Right-stick shots are selected from the
+eight trajectories implemented by the original weapon engine; arbitrary
 sub-direction projectile trajectories would require replacing every weapon's
-movement logic. The aim mailbox uses `$7F:FFF0-$7F:FFF3`, well above the
-original game's low-WRAM working area.
+movement logic. The controller mailbox uses `$7F:FFF0-$7F:FFF9`, well above
+the original game's low-WRAM working area.
 
 Mesen is useful for tracing and deterministic verification of the ROM patch,
 but BizHawk is the runtime target because its Lua API exposes raw host

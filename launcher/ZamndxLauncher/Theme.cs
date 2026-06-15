@@ -11,6 +11,7 @@ internal static class Theme
     internal static readonly Color PurpleHover = ColorTranslator.FromHtml("#A78BFA");
     internal static readonly Color Lime = ColorTranslator.FromHtml("#B7F34A");
     internal static readonly Color LimeHover = ColorTranslator.FromHtml("#CCFF70");
+    internal static readonly Color Blue = ColorTranslator.FromHtml("#2151ac");
     internal static readonly Color Text = ColorTranslator.FromHtml("#F5F7FF");
     internal static readonly Color Muted = ColorTranslator.FromHtml("#9AA3B8");
     internal static readonly Color Danger = ColorTranslator.FromHtml("#FF7188");
@@ -79,7 +80,7 @@ internal static class Theme
 
         using var font = new Font("Segoe UI Black", 20, FontStyle.Bold);
         using var textBrush = new SolidBrush(Background);
-        var text = "DX";
+        var text = "Zombies Ate My Neighbors DX";
         var size = graphics.MeasureString(text, font);
         graphics.DrawString(text, font, textBrush, 33 - size.Width / 2, 31 - size.Height / 2);
 

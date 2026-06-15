@@ -1,9 +1,12 @@
 local frame = 0
 local wram = emu.memType.snesWorkRam
+local output = io.open("mesen-boot-probe.txt", "w")
 
 local function log(message)
 	print(message)
 	emu.log(message)
+	output:write(message .. "\n")
+	output:flush()
 end
 
 local function read16(address)
@@ -17,7 +20,9 @@ local function set_scheduled_input()
 		a = frame >= 760 and menu_phase >= 60 and menu_phase < 84,
 		b = frame >= 760 and menu_phase >= 120 and menu_phase < 144
 	}
-	emu.setInput(buttons, 0)
+	for port = 0, 4 do
+		emu.setInput(buttons, port)
+	end
 end
 
 local function end_frame()
@@ -36,13 +41,16 @@ local function end_frame()
 	end
 
 	if frame == 3000 then
+		output:close()
 		emu.stop(0)
 	end
 end
 
 log("Mesen boot probe started")
-for name, value in pairs(emu.getInput(0)) do
-	log(string.format("input %s=%s", name, tostring(value)))
+for port = 0, 4 do
+	for name, value in pairs(emu.getInput(port)) do
+		log(string.format("input port=%d %s=%s", port, name, tostring(value)))
+	end
 end
 emu.addEventCallback(set_scheduled_input, emu.eventType.inputPolled)
 emu.addEventCallback(end_frame, emu.eventType.endFrame)

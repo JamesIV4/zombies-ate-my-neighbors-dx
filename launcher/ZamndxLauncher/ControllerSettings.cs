@@ -6,8 +6,8 @@ internal sealed class ControllerSettings
 {
     public string Device { get; set; } = "X1";
     public double Deadzone { get; set; } = 0.18;
-    public bool InvertLeftY { get; set; } = true;
-    public bool InvertRightY { get; set; } = true;
+    public bool InvertLeftY { get; set; } = false;
+    public bool InvertRightY { get; set; } = false;
     public Dictionary<string, string> Buttons { get; set; } = DefaultButtons();
     public Dictionary<string, string> Axes { get; set; } = DefaultAxes();
 

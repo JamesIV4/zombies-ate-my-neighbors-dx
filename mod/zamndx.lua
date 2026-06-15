@@ -4,6 +4,11 @@
 local AXIS_MAX = 10000
 local AIM_ACTIVE_ADDRESS = 0x1FFF0
 local AIM_DIRECTION_ADDRESS = 0x1FFF2
+local MOVEMENT_ACTIVE_ADDRESS = 0x1FFF4
+local MOVEMENT_X_ADDRESS = 0x1FFF6
+local MOVEMENT_Y_ADDRESS = 0x1FFF8
+local MOVEMENT_SIGNATURE = 0x5844
+local MOVEMENT_SPEED = 2
 local PLAYER = 1
 
 local script_source = debug.getinfo(1, "S").source
@@ -90,13 +95,22 @@ local function load_settings()
 end
 
 local settings = load_settings()
-local movement_angle_accumulator = 0
-local movement_speed_accumulator = 0
+local movement_x_accumulator = 0
+local movement_y_accumulator = 0
+local previous_movement_x = 0
+local previous_movement_y = 0
+
+local function write_signed16(address, value)
+	mainmemory.write_u16_le(address, value % 0x10000)
+end
 
 local function release_overrides()
 	pcall(function()
 		joypad.set({}, PLAYER)
 		mainmemory.write_u16_le(AIM_ACTIVE_ADDRESS, 0)
+		mainmemory.write_u16_le(MOVEMENT_ACTIVE_ADDRESS, 0)
+		write_signed16(MOVEMENT_X_ADDRESS, 0)
+		write_signed16(MOVEMENT_Y_ADDRESS, 0)
 	end)
 end
 
@@ -129,16 +143,40 @@ local function nearest_direction(x, y)
 	return math.floor(direction_position(x, y) + 0.5) % 8
 end
 
-local function dithered_direction(x, y)
-	local position = direction_position(x, y)
-	local lower = math.floor(position)
-	local fraction = position - lower
-	movement_angle_accumulator = movement_angle_accumulator + fraction
-	if movement_angle_accumulator >= 1 then
-		movement_angle_accumulator = movement_angle_accumulator - 1
-		return (lower + 1) % 8
+local function quantize_axis(accumulator, velocity)
+	accumulator = accumulator + velocity
+	local delta
+	if accumulator >= 0 then
+		delta = math.floor(accumulator + 0.000000001)
+	else
+		delta = math.ceil(accumulator - 0.000000001)
 	end
-	return lower % 8
+	return delta, accumulator - delta
+end
+
+local function adjust_delta(delta, accumulator, replacement)
+	return replacement, accumulator + delta - replacement
+end
+
+local function stabilize_vector(x_delta, y_delta, x_velocity, y_velocity)
+	-- Do not let both axes spend their extra pixel on the same frame. This
+	-- keeps odd-angle full-stick motion from alternating between short and
+	-- conspicuously long diagonal steps.
+	if math.abs(x_delta) >= 2 and math.abs(y_delta) >= 2 then
+		if math.abs(x_velocity) < math.abs(y_velocity) then
+			x_delta, movement_x_accumulator = adjust_delta(
+				x_delta,
+				movement_x_accumulator,
+				x_delta > 0 and x_delta - 1 or x_delta + 1)
+		else
+			y_delta, movement_y_accumulator = adjust_delta(
+				y_delta,
+				movement_y_accumulator,
+				y_delta > 0 and y_delta - 1 or y_delta + 1)
+		end
+	end
+
+	return x_delta, y_delta
 end
 
 local function set_direction(overrides, direction_index)
@@ -153,21 +191,39 @@ end
 
 local function apply_analog_movement(overrides, x, y, magnitude)
 	if magnitude == 0 then
-		movement_angle_accumulator = 0
-		movement_speed_accumulator = 0
-		return
+		movement_x_accumulator = 0
+		movement_y_accumulator = 0
+		previous_movement_x = 0
+		previous_movement_y = 0
+		return false, 0, 0
 	end
 
-	overrides.Up = false
-	overrides.Down = false
-	overrides.Left = false
-	overrides.Right = false
-	movement_speed_accumulator = movement_speed_accumulator + magnitude
-	if movement_speed_accumulator < 1 then
-		return
+	-- Keep one stable native direction for animation and facing. The ROM hook
+	-- uses the independently quantized vector for actual movement.
+	set_direction(overrides, nearest_direction(x, y))
+
+	local x_velocity = x * magnitude * MOVEMENT_SPEED
+	local y_velocity = y * -1 * magnitude * MOVEMENT_SPEED
+	if previous_movement_x * x_velocity + previous_movement_y * y_velocity < 0 then
+		movement_x_accumulator = 0
+		movement_y_accumulator = 0
 	end
-	movement_speed_accumulator = movement_speed_accumulator - 1
-	set_direction(overrides, dithered_direction(x, y))
+	previous_movement_x = x_velocity
+	previous_movement_y = y_velocity
+	local x_delta
+	local y_delta
+	x_delta, movement_x_accumulator = quantize_axis(
+		movement_x_accumulator,
+		x_velocity)
+	y_delta, movement_y_accumulator = quantize_axis(
+		movement_y_accumulator,
+		y_velocity)
+	x_delta, y_delta = stabilize_vector(
+		x_delta,
+		y_delta,
+		x_velocity,
+		y_velocity)
+	return true, x_delta, y_delta
 end
 
 local function mapped_button_overrides(host_buttons)
@@ -194,6 +250,9 @@ while true do
 	local axes = input.get_pressed_axes()
 	local overrides = {}
 	local aim_active = false
+	local movement_active = false
+	local movement_x = 0
+	local movement_y = 0
 
 	if settings.enabled then
 		overrides = mapped_button_overrides(host_buttons)
@@ -210,7 +269,8 @@ while true do
 		end
 
 		local move_x, move_y, move_magnitude = apply_deadzone(left_x, left_y)
-		apply_analog_movement(overrides, move_x, move_y, move_magnitude)
+		movement_active, movement_x, movement_y =
+			apply_analog_movement(overrides, move_x, move_y, move_magnitude)
 
 		local aim_x, aim_y, aim_magnitude = apply_deadzone(right_x, right_y)
 		aim_active = aim_magnitude > 0
@@ -222,6 +282,11 @@ while true do
 	end
 
 	mainmemory.write_u16_le(AIM_ACTIVE_ADDRESS, aim_active and 1 or 0)
+	mainmemory.write_u16_le(
+		MOVEMENT_ACTIVE_ADDRESS,
+		movement_active and MOVEMENT_SIGNATURE or 0)
+	write_signed16(MOVEMENT_X_ADDRESS, movement_x)
+	write_signed16(MOVEMENT_Y_ADDRESS, movement_y)
 	joypad.set(overrides, PLAYER)
 	emu.frameadvance()
 end

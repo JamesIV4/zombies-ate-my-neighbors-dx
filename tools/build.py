@@ -22,6 +22,13 @@ DEFAULT_IPS = "dist/zamndx.ips"
 # $81:FF48. It reads the analog aim state that Lua places at the top of WRAM,
 # changes player 1's facing, and returns the original button-test result and
 # processor flags.
+#
+# The movement hook replaces the entry to the tentative-position routine at
+# $80:E450 with a jump to unused padding at $81:FF70. For player 1 analog
+# movement, it adds Lua's fixed-point-quantized X/Y deltas to the authoritative
+# player position. The original collision and coordinate commit routines then
+# run unchanged, keeping the camera, tilemap, sprites, and collision in sync.
+# Other players and normal digital input continue through the original code.
 PATCHES = (
     (0x003EF8, bytes.fromhex("08 00"), bytes.fromhex("0C 00")),
     (0x003EFB, bytes.fromhex("10 00"), bytes.fromhex("18 00")),
@@ -48,6 +55,36 @@ PATCHES = (
             "85 26 "        # STA $26: facing direction
             "68 "           # restore: PLA
             "6B"            # RTL
+        ),
+    ),
+    (
+        0x006450,
+        bytes.fromhex("A5 24 A8 29"),
+        bytes.fromhex("5C 70 FF 81"),  # JML $81:FF70
+    ),
+    (
+        0x00FF70,
+        bytes.fromhex("FF " * 47),
+        bytes.fromhex(
+            "AF F4 FF 7F "  # LDA.l $7FFFF4: movement mailbox signature
+            "C9 44 58 "     # CMP #$5844: "DX"
+            "D0 1C "        # BNE digital fallback
+            "7B "           # TDC: identify the active player's direct page
+            "C9 00 01 "     # CMP #$0100: player 1
+            "D0 16 "        # BNE digital fallback
+            "A5 30 "        # LDA $30: authoritative X
+            "18 "           # CLC
+            "6F F6 FF 7F "  # ADC.l $7FFFF6: signed X delta
+            "85 34 "        # STA $34: tentative X
+            "A5 32 "        # LDA $32: authoritative Y
+            "18 "           # CLC
+            "6F F8 FF 7F "  # ADC.l $7FFFF8: signed Y delta
+            "85 36 "        # STA $36: tentative Y
+            "5C 85 E4 00 "  # JML $00:E485: original RTS
+            "A5 24 "        # digital fallback: original LDA $24
+            "A8 "           # TAY
+            "29 02 00 "     # AND #$0002: overwritten by entry hook
+            "5C 56 E4 00"   # JML $00:E456: resume original routine
         ),
     ),
 )

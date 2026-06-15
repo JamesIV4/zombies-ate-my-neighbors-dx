@@ -98,11 +98,11 @@ local function end_frame()
 			output:flush()
 		else
 			output:close()
-			emu.exit(0)
+			emu.stop(0)
 		end
 	elseif frame > 5000 then
 		output:close()
-		emu.exit(2)
+		emu.stop(2)
 	end
 end
 

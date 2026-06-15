@@ -202,7 +202,7 @@ $manifest = [ordered]@{
     )
     dotnet_sdk_version = $DotnetVersion
     expected_source_rom_sha256 = "B27E2E957FA760F4F483E2AF30E03062034A6C0066984F2E284CC2CB430B2059"
-    expected_patched_rom_sha256 = "4B544A574C3D3D41171CD4F96DBA32B3BC694EACC561ADAB33212A4958DDB85B"
+    expected_patched_rom_sha256 = "7F5D5D818AA4C68BD05367A95A5F2950F354A310648CF1585D06529A0BEFA8D5"
     generated_utc = [DateTime]::UtcNow.ToString("o")
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $StageDirectory "release-manifest.json") -Encoding UTF8
