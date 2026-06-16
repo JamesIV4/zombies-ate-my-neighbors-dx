@@ -15,6 +15,7 @@ censored red blood on the Game Over screen
 - **Reverse Inventory Cycling**
 ([hack #4318](https://www.romhacking.net/hacks/4318/)): lets you cycle
 weapons and items in both directions and enables a reworked control layout
+- **Battery Save** (["SNESRAM" hack #7312](https://www.romhacking.net/hacks/7312/)): saves the game after each level. Load by using an empty password.
 
 The ROM patch retains the original wall collision, enemy, item, camera, tile,
 and weapon code. The controller layer translates analog input into per-frame
