@@ -8,11 +8,13 @@ This emulator-only mod for the USA SNES release adds:
   directions.
 
 It also bundles optional ROM patches you can mix in from the
-launcher's `Configure ROM Patches` screen: the **Bloody Disgusting Edition**
-([hack #4306](https://www.romhacking.net/hacks/4306/)), which restores the
-censored red blood on the Game Over screen, and **Reverse Inventory Cycling**
-([hack #4318](https://www.romhacking.net/hacks/4318/)), which lets you cycle
-weapons and items in both directions and enables a reworked control layout.
+launcher's `Configure ROM Patches` screen: 
+- **Bloody Disgusting Edition**
+([hack #4306](https://www.romhacking.net/hacks/4306/)): restores the
+censored red blood on the Game Over screen
+- **Reverse Inventory Cycling**
+([hack #4318](https://www.romhacking.net/hacks/4318/)): lets you cycle
+weapons and items in both directions and enables a reworked control layout
 
 The ROM patch retains the original wall collision, enemy, item, camera, tile,
 and weapon code. The controller layer translates analog input into per-frame
