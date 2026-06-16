@@ -1,0 +1,35 @@
+Zombies Ate My Neighbors SNESRAM (Battery Save)
+===============================================
+
+Optional improvement bundled with Zombies Ate My Neighbors DX.
+
+Source: https://www.romhacking.net/hacks/7312/
+Author: BillyTime! Games
+File:   snes-sram-save.ips
+SHA-256 of patch: 4FF05975937E6CDBAC3EC8FA99B3C31F69FB034A198A89A06D2E41E238D0D976
+
+What it does
+------------
+Adds a battery-save mechanism. The game saves automatically after every level,
+storing the current level plus the ammo and item counts for both players to SNES
+SRAM. (Squirt-gun ammo and medikit counts are not saved, as in the original.)
+To load, open the password screen and press Start.
+
+The patch expands the ROM to 1.5 MB and sets the SNES header's RAM-size byte so
+the cartridge reports 2 KB of battery SRAM. In ZAMN DX the launcher recomputes
+the SNES checksum for the (now non-power-of-two) ROM and configures BizHawk to
+flush SaveRAM periodically, so progress survives even an unclean exit. The save
+is stored as a .srm file in BizHawk's SaveRAM folder.
+
+Notes
+-----
+- Start a new game first. Loading from the password screen with no save yet
+  produces a black screen (documented behaviour of the hack).
+- The patch's readme lists it as compatible with the Bloody Disgusting Edition
+  and Reverse Inventory Cycling hacks, both of which ZAMN DX also bundles.
+
+This IPS targets the headerless USA ROM
+(MD5 23C2AF7897D9384C4791189B68C142EB), the same ROM ZAMN DX requires.
+
+Credit for this hack belongs to its original author on romhacking.net; it is
+redistributed here for player convenience. See the hack page above for details.

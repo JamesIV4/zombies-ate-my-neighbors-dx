@@ -64,7 +64,7 @@ internal static class ControlSchemes
     /// </summary>
     internal static readonly ControlScheme ReverseCycling = new(
         "reverse-cycling",
-        "Twin-stick cycling",
+        "Revised cycling",
         [
             .. Common,
             new("weapon_next", "Weapon next", "RightTrigger", ["B"]),

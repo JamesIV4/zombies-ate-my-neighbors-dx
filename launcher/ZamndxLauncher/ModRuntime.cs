@@ -182,20 +182,46 @@ internal static class ModRuntime
             return;
         }
 
-        // The stored checksum and its complement always contribute 0x1FE to the
-        // byte total, so the recompute is stable with the existing pair present.
-        var checksum = 0;
-        foreach (var value in rom)
-        {
-            checksum += value;
-        }
-        checksum &= 0xFFFF;
+        var checksum = ComputeSnesChecksum(rom);
         var complement = checksum ^ 0xFFFF;
 
         rom[ChecksumOffset] = (byte)(complement & 0xFF);
         rom[ChecksumOffset + 1] = (byte)((complement >> 8) & 0xFF);
         rom[ChecksumOffset + 2] = (byte)(checksum & 0xFF);
         rom[ChecksumOffset + 3] = (byte)((checksum >> 8) & 0xFF);
+    }
+
+    // The stored checksum and its complement always contribute 0x1FE to the byte
+    // total, so this is stable with the existing pair present. ROMs whose size is
+    // not a power of two (the battery-save patch grows the ROM to 1.5 MB) mirror
+    // the trailing region up to the previous power-of-two boundary, matching how
+    // the SNES and emulators compute the header checksum.
+    internal static int ComputeSnesChecksum(byte[] rom)
+    {
+        var half = 1;
+        while (half * 2 <= rom.Length)
+        {
+            half *= 2;
+        }
+
+        long sum = 0;
+        for (var i = 0; i < half; i++)
+        {
+            sum += rom[i];
+        }
+
+        var remainder = rom.Length - half;
+        if (remainder > 0)
+        {
+            long remainderSum = 0;
+            for (var i = half; i < rom.Length; i++)
+            {
+                remainderSum += rom[i];
+            }
+            sum += remainderSum * (half / remainder);
+        }
+
+        return (int)(sum & 0xFFFF);
     }
 
     private static PatchManifest? ReadManifest()
@@ -275,6 +301,13 @@ internal static class ModRuntime
         config["AcceptBackgroundInputControllerOnly"] = true;
         config["LastWrittenFrom"] = "2.11.1";
         config["LastWrittenFromDetailed"] = "Version 2.11.1";
+
+        // The battery-save patch persists progress to SRAM. BizHawk only writes
+        // SaveRAM to disk on a clean close by default, so flush it periodically
+        // (about every ten seconds) and keep a backup so a hard quit cannot lose
+        // a save the game just wrote at the end of a level.
+        config["FlushSaveRamFrames"] = 600;
+        config["BackupSaveram"] = true;
 
         var commonToolSettings = config["CommonToolSettings"] as JsonObject
             ?? new JsonObject();

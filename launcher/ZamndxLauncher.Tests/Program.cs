@@ -70,6 +70,17 @@ Check(RomPatchCatalog.Base is { Mandatory: true, Id: "dx" }, "base patch is mand
 var reverseCycling = RomPatchCatalog.Optional.SingleOrDefault(patch => patch.Id == "reverse-cycling");
 Check(reverseCycling is { Mandatory: false } && reverseCycling.ExpectedSha256?.Length == 64,
     "reverse-cycling patch registered with integrity hash");
+var savePatch = RomPatchCatalog.Optional.SingleOrDefault(patch => patch.Id == "save");
+Check(savePatch is { Mandatory: false } && savePatch.ExpectedSha256?.Length == 64,
+    "battery-save patch registered with integrity hash");
+
+// Power-of-two ROMs sum every byte; a 1.5x ROM mirrors the trailing region.
+Check(
+    ModRuntime.ComputeSnesChecksum([1, 2, 3, 4]) == 10,
+    "checksum sums a power-of-two ROM");
+Check(
+    ModRuntime.ComputeSnesChecksum([1, 2, 3, 4, 10, 20]) == 10 + (10 + 20) * 2,
+    "checksum mirrors a non-power-of-two ROM");
 var bloody = RomPatchCatalog.Optional.SingleOrDefault(patch => patch.Id == "bloody");
 Check(bloody is { Mandatory: false, DefaultEnabled: true }, "bloody patch optional and default on");
 Check(

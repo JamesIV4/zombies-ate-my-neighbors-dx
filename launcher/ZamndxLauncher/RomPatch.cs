@@ -54,6 +54,17 @@ internal static class RomPatchCatalog
             Mandatory: false,
             DefaultEnabled: true,
             ExpectedSha256: "2CB1E64CFFB4529F6593CEA815E53C9DE4033DB586D0B3E4FBDAEEC4D58E2237"),
+        new RomPatch(
+            Id: "save",
+            Name: "Battery Save",
+            Description: "Saves your level, ammo, and item counts to battery SRAM "
+                + "after every level (romhacking.net hack #7312). To load, open the "
+                + "password screen and press Start. Start a new game first - loading "
+                + "with no save yet shows a black screen.",
+            FileName: "snes-sram-save.ips",
+            Mandatory: false,
+            DefaultEnabled: true,
+            ExpectedSha256: "4FF05975937E6CDBAC3EC8FA99B3C31F69FB034A198A89A06D2E41E238D0D976"),
     ];
 
     internal const string ReverseCyclingId = "reverse-cycling";

@@ -125,6 +125,8 @@ Copy-Item -LiteralPath (Join-Path $Root "mod\bloody-disgusting.ips") -Destinatio
 Copy-Item -LiteralPath (Join-Path $Root "mod\bloody-disgusting.txt") -Destination (Join-Path $StageDirectory "mod\bloody-disgusting.txt")
 Copy-Item -LiteralPath (Join-Path $Root "mod\reverse-inventory-cycling.ips") -Destination (Join-Path $StageDirectory "mod\reverse-inventory-cycling.ips")
 Copy-Item -LiteralPath (Join-Path $Root "mod\reverse-inventory-cycling.txt") -Destination (Join-Path $StageDirectory "mod\reverse-inventory-cycling.txt")
+Copy-Item -LiteralPath (Join-Path $Root "mod\snes-sram-save.ips") -Destination (Join-Path $StageDirectory "mod\snes-sram-save.ips")
+Copy-Item -LiteralPath (Join-Path $Root "mod\snes-sram-save.txt") -Destination (Join-Path $StageDirectory "mod\snes-sram-save.txt")
 Copy-Item -LiteralPath (Join-Path $Root "README.md") -Destination (Join-Path $StageDirectory "README.md")
 
 $stagedLauncher = Join-Path $StageDirectory "ZAMN-DX.exe"
@@ -300,6 +302,11 @@ $manifest = [ordered]@{
             file = "mod/reverse-inventory-cycling.ips"
             sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\reverse-inventory-cycling.ips") -Algorithm SHA256).Hash
         }
+        [ordered]@{
+            id = "save"
+            file = "mod/snes-sram-save.ips"
+            sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\snes-sram-save.ips") -Algorithm SHA256).Hash
+        }
     )
     bizhawk_version = $BizHawkVersion
     bizhawk_archive_sha256 = (Get-FileHash -LiteralPath $BizHawkZip -Algorithm SHA256).Hash
@@ -328,6 +335,7 @@ $checksums = @(
     "$($manifest.lua_sha256)  mod/zamndx.lua"
     "$($manifest.optional_patches[0].sha256)  mod/bloody-disgusting.ips"
     "$($manifest.optional_patches[1].sha256)  mod/reverse-inventory-cycling.ips"
+    "$($manifest.optional_patches[2].sha256)  mod/snes-sram-save.ips"
 )
 $checksums | Set-Content -LiteralPath (Join-Path $StageDirectory "SHA256SUMS.txt") -Encoding ASCII
 

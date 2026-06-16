@@ -156,6 +156,7 @@ selection is applied the next time you press `Play Game`.
 | ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Bloody Disgusting Edition | On      | Restores censored red blood on the Game Over screen ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)). Edits only the blood-drip sprite tiles, so the purple transformation monster and other graphics stay untouched. |
 | Reverse Inventory Cycling | On      | Cycle weapons and items in both directions ([romhacking.net hack #4318](https://www.romhacking.net/hacks/4318/)). Enables the reworked control scheme below (configurable).                                                                               |
+| Battery Save              | On      | Saves level/ammo/item progress to SRAM after every level ([romhacking.net hack #7312](https://www.romhacking.net/hacks/7312/)). Load from the password screen with Start. Start a new game first - loading with no save shows a black screen. |
 
 ### Control schemes
 
@@ -183,9 +184,14 @@ re-bindable in `Configure Controller`.
 The launcher rebuilds the patched ROM whenever your selection changes. It first
 applies the DX core patch and verifies it against the published DX hash, then
 stacks each enabled optional patch (verifying its integrity hash) and recomputes
-the SNES checksum. The active selection and the resulting ROM hash are recorded
-in `%LOCALAPPDATA%\ZAMNDX\Games\patched.json`, and your toggles are saved in
-`%LOCALAPPDATA%\ZAMNDX\patches.json`.
+the SNES checksum (correctly mirroring the trailing region when the Battery Save
+patch grows the ROM to a non-power-of-two size). The active selection and the
+resulting ROM hash are recorded in `%LOCALAPPDATA%\ZAMNDX\Games\patched.json`,
+and your toggles are saved in `%LOCALAPPDATA%\ZAMNDX\patches.json`.
+
+With Battery Save enabled the launcher also configures BizHawk to flush SaveRAM
+periodically, so end-of-level saves are written to the `.srm` file even on an
+unclean exit. Start a new game before trying to load.
 
 Bundled optional patches are third-party hacks redistributed for convenience;
 see `mod\bloody-disgusting.txt` for the source and attribution.
