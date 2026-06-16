@@ -7,10 +7,10 @@ This emulator-only mod for the USA SNES release adds:
 - Independent right-stick aiming and firing in the game's eight native shot
   directions.
 
-It also bundles optional, toggleable ROM patches you can mix in from the
+It also bundles optional ROM patches you can mix in from the
 launcher's `Configure ROM Patches` screen: the **Bloody Disgusting Edition**
 ([hack #4306](https://www.romhacking.net/hacks/4306/)), which restores the
-uncensored red blood on the Game Over screen, and **Reverse Inventory Cycling**
+censored red blood on the Game Over screen, and **Reverse Inventory Cycling**
 ([hack #4318](https://www.romhacking.net/hacks/4318/)), which lets you cycle
 weapons and items in both directions and enables a reworked control layout.
 
