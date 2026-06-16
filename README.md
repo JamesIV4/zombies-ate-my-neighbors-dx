@@ -7,6 +7,11 @@ This emulator-only mod for the USA SNES release adds:
 - Independent right-stick aiming and firing in the game's eight native shot
   directions.
 
+It also bundles optional, toggleable ROM patches you can mix in from the
+launcher's `Configure ROM Patches` screen. The first of these is the
+**Bloody Disgusting Edition** ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)),
+which restores the uncensored red blood on the Game Over screen.
+
 The ROM patch retains the original wall collision, enemy, item, camera, tile,
 and weapon code. The controller layer translates analog input into per-frame
 movement deltas and writes them, plus the requested aim direction, to reserved
@@ -46,8 +51,8 @@ The release never downloads or distributes the game ROM itself.
 - An XInput-compatible dual-stick controller.
 
 The release ZIP includes the self-contained launcher, .NET runtime, BizHawk
-2.11.1, the app-local Microsoft Visual C++ runtime, the IPS patch, and the Lua
-controller runtime. Players do not need to install an emulator, .NET,
+2.11.1, the app-local Microsoft Visual C++ runtime, the DX IPS patch, the
+optional ROM patches, and the Lua controller runtime. Players do not need to install an emulator, .NET,
 PowerShell, Python, the Visual C++ Redistributable, or any other dependency.
 
 The expected source ROM SHA-256 is:
@@ -124,13 +129,38 @@ certificate does not establish public trust.
 ## Run
 
 The launcher is the recommended way to run the mod. It opens before BizHawk
-and presents three actions:
+and presents four actions:
 
 - `Play Game` starts BizHawk in full screen, hides its Lua utility window, and
   transfers controller focus to the game automatically.
 - `Configure Controller` opens controller selection, live testing, deadzone,
   inversion, and input assignment.
+- `Configure ROM Patches` toggles the optional improvements that are stacked on
+  top of the DX core patch.
 - `Quit` closes the launcher.
+
+The main window shows which optional patches are currently active beneath the
+feature card.
+
+## Optional ROM Patches
+
+The DX core patch is always applied. Optional improvements are listed under
+`Configure ROM Patches` and can be turned on or off independently; the new
+selection is applied the next time you press `Play Game`.
+
+| Patch | Default | Description |
+| --- | --- | --- |
+| Bloody Disgusting Edition | On | Restores uncensored red blood on the Game Over screen ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)). Edits only the blood-drip sprite tiles, so the purple transformation monster and other graphics stay untouched. |
+
+The launcher rebuilds the patched ROM whenever your selection changes. It first
+applies the DX core patch and verifies it against the published DX hash, then
+stacks each enabled optional patch (verifying its integrity hash) and recomputes
+the SNES checksum. The active selection and the resulting ROM hash are recorded
+in `%LOCALAPPDATA%\ZAMNDX\Games\patched.json`, and your toggles are saved in
+`%LOCALAPPDATA%\ZAMNDX\patches.json`.
+
+Bundled optional patches are third-party hacks redistributed for convenience;
+see `mod\bloody-disgusting.txt` for the source and attribution.
 
 To assign an input, click `Capture`, release all controls, then press the
 desired button or move the desired stick axis. Capture is performed directly

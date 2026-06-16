@@ -121,6 +121,8 @@ if (Test-Path -LiteralPath $StageDirectory) {
 Copy-Item -LiteralPath (Join-Path $PublishDirectory "ZAMN-DX.exe") -Destination $StageDirectory
 Copy-Item -LiteralPath (Join-Path $Root "dist\zamndx.ips") -Destination (Join-Path $StageDirectory "mod\zamndx.ips")
 Copy-Item -LiteralPath (Join-Path $Root "mod\zamndx.lua") -Destination (Join-Path $StageDirectory "mod\zamndx.lua")
+Copy-Item -LiteralPath (Join-Path $Root "mod\bloody-disgusting.ips") -Destination (Join-Path $StageDirectory "mod\bloody-disgusting.ips")
+Copy-Item -LiteralPath (Join-Path $Root "mod\bloody-disgusting.txt") -Destination (Join-Path $StageDirectory "mod\bloody-disgusting.txt")
 Copy-Item -LiteralPath (Join-Path $Root "README.md") -Destination (Join-Path $StageDirectory "README.md")
 
 $stagedLauncher = Join-Path $StageDirectory "ZAMN-DX.exe"
@@ -285,6 +287,13 @@ $manifest = [ordered]@{
     timestamp_server = if ($null -ne $signingCertificate -and -not $SkipTimestamp) { $TimestampServer } else { $null }
     patch_sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\zamndx.ips") -Algorithm SHA256).Hash
     lua_sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\zamndx.lua") -Algorithm SHA256).Hash
+    optional_patches = @(
+        [ordered]@{
+            id = "bloody"
+            file = "mod/bloody-disgusting.ips"
+            sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\bloody-disgusting.ips") -Algorithm SHA256).Hash
+        }
+    )
     bizhawk_version = $BizHawkVersion
     bizhawk_archive_sha256 = (Get-FileHash -LiteralPath $BizHawkZip -Algorithm SHA256).Hash
     bizhawk_download = "https://github.com/TASEmulators/BizHawk/releases/download/$BizHawkVersion/BizHawk-$BizHawkVersion-win-x64.zip"
@@ -310,6 +319,7 @@ $checksums = @(
     "$($manifest.launcher_sha256)  ZAMN-DX.exe"
     "$($manifest.patch_sha256)  mod/zamndx.ips"
     "$($manifest.lua_sha256)  mod/zamndx.lua"
+    "$($manifest.optional_patches[0].sha256)  mod/bloody-disgusting.ips"
 )
 $checksums | Set-Content -LiteralPath (Join-Path $StageDirectory "SHA256SUMS.txt") -Encoding ASCII
 

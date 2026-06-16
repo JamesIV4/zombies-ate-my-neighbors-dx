@@ -1,0 +1,25 @@
+Zombies Ate My Neighbors [BLOODY DISGUSTING EDITION]
+====================================================
+
+Optional improvement bundled with Zombies Ate My Neighbors DX.
+
+Source: https://www.romhacking.net/hacks/4306/
+File:   bloody-disgusting.ips
+SHA-256 of patch: 14C54077012147A146E0FA3EAEF1D2673A2B8493D71C40A126FA2A843E557374
+
+What it does
+------------
+The US SNES release censors blood by palette-swapping it from red to
+purple/violet. This patch edits the blood-drip sprite tiles so the Game Over
+screen shows red blood again, matching the rest of the SNES game's palette.
+Unlike palette-level edits, it leaves the shared palette untouched, so the
+purple transformation monster and everything else stay true to the original.
+
+This IPS targets the headerless USA ROM
+(MD5 23C2AF7897D9384C4791189B68C142EB), the same ROM ZAMN DX requires. In the
+launcher it is applied on top of the DX core patch and can be toggled under
+"Configure ROM Patches".
+
+Credit for this hack belongs to its original author on romhacking.net; it is
+redistributed here for player convenience. See the hack page above for the
+full author notes and acknowledgements.

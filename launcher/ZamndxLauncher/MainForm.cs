@@ -5,9 +5,12 @@ namespace ZamndxLauncher;
 internal sealed class MainForm : Form
 {
     private ControllerSettings _settings;
+    private PatchSettings _patches;
     private readonly Label _status;
+    private readonly Label _patchSummary;
     private readonly Button _play;
     private readonly Button _configure;
+    private readonly Button _romPatches;
     private readonly Button _quit;
     private readonly System.Windows.Forms.Timer _controllerTimer;
 
@@ -48,9 +51,10 @@ internal sealed class MainForm : Form
     internal MainForm()
     {
         _settings = SettingsStore.Load();
+        _patches = PatchSettingsStore.Load();
 
         Text = "Zombies Ate My Neighbors DX";
-        ClientSize = new Size(720, 490);
+        ClientSize = new Size(720, 548);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -62,7 +66,7 @@ internal sealed class MainForm : Form
         Controls.Add(new Panel
         {
             Location = new Point(0, 0),
-            Size = new Size(8, 490),
+            Size = new Size(8, 548),
             BackColor = Theme.Purple,
         });
         Controls.Add(CreateSplitTitle());
@@ -85,26 +89,37 @@ internal sealed class MainForm : Form
         card.Controls.Add(Theme.Label("Fire with the right stick", 414, 75, 185, 20, 9, Theme.Muted));
         Controls.Add(card);
 
+        _patchSummary = Theme.Label("", 50, 282, 622, 24, 10, Theme.Lime, FontStyle.Bold);
+        Controls.Add(_patchSummary);
+
         _play = Theme.Button(
-            "Play Game", 48, 301, 296, 58,
+            "Play Game", 48, 320, 296, 58,
             Theme.Lime, Theme.Background, Theme.LimeHover);
         _play.Click += async (_, _) => await PlayGameAsync();
         Controls.Add(_play);
 
         _configure = Theme.Button(
-            "Configure Controller", 376, 301, 296, 58,
+            "Configure Controller", 376, 320, 296, 58,
             Theme.Purple, Theme.Text, Theme.PurpleHover);
         _configure.Click += (_, _) => ConfigureController();
         Controls.Add(_configure);
 
+        _romPatches = Theme.Button(
+            "Configure ROM Patches", 48, 390, 624, 46,
+            Theme.SurfaceRaised, Theme.Text, Theme.Purple);
+        _romPatches.Click += (_, _) => ConfigurePatches();
+        Controls.Add(_romPatches);
+
         _quit = Theme.Button(
-            "Quit", 48, 376, 624, 42,
+            "Quit", 48, 448, 624, 42,
             Theme.SurfaceRaised, Theme.Text, Theme.Purple);
         _quit.Click += (_, _) => Close();
         Controls.Add(_quit);
 
-        _status = Theme.Label("Checking controller...", 49, 444, 620, 22, 9.5f, Theme.Muted);
+        _status = Theme.Label("Checking controller...", 49, 502, 620, 22, 9.5f, Theme.Muted);
         Controls.Add(_status);
+
+        UpdatePatchSummary();
 
         _controllerTimer = new System.Windows.Forms.Timer { Interval = 750 };
         _controllerTimer.Tick += (_, _) => RefreshControllerStatus();
@@ -128,6 +143,29 @@ internal sealed class MainForm : Form
         RefreshControllerStatus();
     }
 
+    private void ConfigurePatches()
+    {
+        using var form = new PatchesForm(_patches);
+        if (form.ShowDialog(this) == DialogResult.OK && form.SavedSettings is not null)
+        {
+            _patches = form.SavedSettings;
+            UpdatePatchSummary();
+            SetStatus("ROM patches updated - applied on next launch", Theme.Muted);
+        }
+    }
+
+    private void UpdatePatchSummary()
+    {
+        var active = RomPatchCatalog.Optional
+            .Where(patch => _patches.IsEnabled(patch.Id) && RomPatchCatalog.IsAvailable(patch))
+            .Select(patch => patch.Name)
+            .ToList();
+
+        _patchSummary.Text = active.Count == 0
+            ? "ROM patches: core only"
+            : "ROM patches: " + string.Join(", ", active);
+    }
+
     private async Task PlayGameAsync()
     {
         SetButtonsEnabled(false);
@@ -135,7 +173,7 @@ internal sealed class MainForm : Form
         {
             SetStatus("Preparing game files...", Theme.Lime);
             await Task.Yield();
-            ModRuntime.Prepare(_settings, this);
+            ModRuntime.Prepare(_settings, _patches, this);
 
             SetStatus("Starting in full screen...", Theme.Lime);
             var process = ModRuntime.StartGame();
@@ -191,6 +229,7 @@ internal sealed class MainForm : Form
     {
         _play.Enabled = enabled;
         _configure.Enabled = enabled;
+        _romPatches.Enabled = enabled;
         _quit.Enabled = enabled;
     }
 

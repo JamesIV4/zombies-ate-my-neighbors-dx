@@ -28,6 +28,22 @@ var clone = settings.Clone();
 clone.Buttons["Y"] = "B";
 Check(settings.Buttons["Y"] == "X", "settings clone isolation");
 
+Check(RomPatchCatalog.Base is { Mandatory: true, Id: "dx" }, "base patch is mandatory");
+var bloody = RomPatchCatalog.Optional.SingleOrDefault(patch => patch.Id == "bloody");
+Check(bloody is { Mandatory: false, DefaultEnabled: true }, "bloody patch optional and default on");
+Check(
+    bloody?.ExpectedSha256 is { Length: 64 } hash && hash.All(Uri.IsHexDigit),
+    "bloody patch has an integrity hash");
+Check(RomPatchCatalog.All.First() == RomPatchCatalog.Base, "base patch applied first");
+
+var patchSettings = new PatchSettings { Enabled = ["bloody", "unknown", "bloody"] };
+var patchClone = patchSettings.Clone();
+patchClone.Enabled.Add("dx");
+Check(patchSettings.Enabled.Count == 3, "patch settings clone isolation");
+Check(
+    patchSettings.ResolveOrderedIds().First() == "dx",
+    "resolved patch ids start with the base patch");
+
 var patchedRomHash = typeof(ModRuntime).Assembly
     .GetCustomAttributes<AssemblyMetadataAttribute>()
     .SingleOrDefault(attribute => attribute.Key == "ExpectedPatchedRomHash")
@@ -80,9 +96,14 @@ try
             (byte)'E', (byte)'O', (byte)'F',
         ]);
     IpsPatcher.Apply(romPath, patchPath, outputPath);
+    var expected = new byte[] { 0x10, 0xAA, 0xBB, 0x40 };
     Check(
-        File.ReadAllBytes(outputPath).SequenceEqual(new byte[] { 0x10, 0xAA, 0xBB, 0x40 }),
+        File.ReadAllBytes(outputPath).SequenceEqual(expected),
         "IPS patch application");
+    Check(
+        IpsPatcher.Apply(File.ReadAllBytes(romPath), File.ReadAllBytes(patchPath))
+            .SequenceEqual(expected),
+        "in-memory IPS patch application");
 }
 finally
 {

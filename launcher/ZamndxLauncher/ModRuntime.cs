@@ -27,10 +27,13 @@ internal static class ModRuntime
         return value.ToUpperInvariant();
     }
 
-    internal static void Prepare(ControllerSettings settings, IWin32Window owner)
+    internal static void Prepare(
+        ControllerSettings settings,
+        PatchSettings patches,
+        IWin32Window owner)
     {
         AppPaths.ValidateBundle();
-        EnsurePatchedRom(owner);
+        EnsurePatchedRom(patches, owner);
         Directory.CreateDirectory(AppPaths.RuntimeDirectory);
         File.Copy(AppPaths.BundledLuaPath, AppPaths.RuntimeLuaPath, true);
         WriteLuaConfig(settings);
@@ -58,10 +61,15 @@ internal static class ModRuntime
             ?? throw new InvalidOperationException("BizHawk could not be started.");
     }
 
-    private static void EnsurePatchedRom(IWin32Window owner)
+    // SNES LoROM checksum/complement live at the end of the first bank. After
+    // any optional patch changes ROM bytes the original checksum no longer
+    // matches, so it is recomputed once the full stack has been applied.
+    private const int ChecksumOffset = 0x7FDC;
+
+    private static void EnsurePatchedRom(PatchSettings patches, IWin32Window owner)
     {
-        if (File.Exists(AppPaths.PatchedRomPath)
-            && HashFile(AppPaths.PatchedRomPath) == ExpectedPatchedHash)
+        var desiredIds = patches.ResolveOrderedIds();
+        if (IsCachedRomCurrent(desiredIds))
         {
             return;
         }
@@ -93,21 +101,149 @@ internal static class ModRuntime
                 + $"Selected ROM SHA-256:\n{actualHash}");
         }
 
-        Directory.CreateDirectory(AppPaths.GamesDirectory);
-        IpsPatcher.Apply(sourcePath, AppPaths.BundledIpsPath, AppPaths.PatchedRomPath);
-        var patchedHash = HashFile(AppPaths.PatchedRomPath);
-        if (patchedHash != ExpectedPatchedHash)
+        // Apply the base DX patch first and verify it against the published hash
+        // so a corrupt or wrong base patch is always caught, then stack any
+        // enabled optional patches on top of the verified DX ROM.
+        var rom = IpsPatcher.Apply(
+            File.ReadAllBytes(sourcePath),
+            File.ReadAllBytes(AppPaths.BundledIpsPath));
+        var baseHash = HashBytes(rom);
+        if (baseHash != ExpectedPatchedHash)
         {
-            File.Delete(AppPaths.PatchedRomPath);
             throw new InvalidOperationException(
-                $"The patched ROM failed verification. Expected {ExpectedPatchedHash}, got {patchedHash}.");
+                $"The base DX patch failed verification. Expected {ExpectedPatchedHash}, got {baseHash}.");
         }
+
+        foreach (var patch in RomPatchCatalog.Optional)
+        {
+            if (!desiredIds.Contains(patch.Id))
+            {
+                continue;
+            }
+
+            var patchPath = AppPaths.BundledPatchPath(patch.FileName);
+            if (!File.Exists(patchPath))
+            {
+                throw new InvalidOperationException(
+                    $"The \"{patch.Name}\" improvement is enabled but its patch "
+                    + $"file is missing:\n\nmod\\{patch.FileName}");
+            }
+
+            var patchBytes = File.ReadAllBytes(patchPath);
+            if (patch.ExpectedSha256 is not null
+                && HashBytes(patchBytes) != patch.ExpectedSha256)
+            {
+                throw new InvalidOperationException(
+                    $"The \"{patch.Name}\" improvement patch failed its integrity check.");
+            }
+
+            rom = IpsPatcher.Apply(rom, patchBytes);
+        }
+
+        FixSnesChecksum(rom);
+
+        Directory.CreateDirectory(AppPaths.GamesDirectory);
+        File.WriteAllBytes(AppPaths.PatchedRomPath, rom);
+        WriteManifest(desiredIds, HashBytes(rom));
+    }
+
+    private static bool IsCachedRomCurrent(IReadOnlyList<string> desiredIds)
+    {
+        if (!File.Exists(AppPaths.PatchedRomPath))
+        {
+            return false;
+        }
+
+        var manifest = ReadManifest();
+        if (manifest is not null)
+        {
+            return manifest.PatchIds.SequenceEqual(desiredIds)
+                && HashFile(AppPaths.PatchedRomPath) == manifest.Sha256;
+        }
+
+        // Pre-upgrade installs have no manifest. Accept an existing base-only ROM
+        // that matches the published DX hash so those users are not re-prompted
+        // for their source ROM, and record a manifest for next time.
+        if (desiredIds.Count == 1
+            && desiredIds[0] == RomPatchCatalog.Base.Id
+            && HashFile(AppPaths.PatchedRomPath) == ExpectedPatchedHash)
+        {
+            WriteManifest(desiredIds, ExpectedPatchedHash);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void FixSnesChecksum(byte[] rom)
+    {
+        if (rom.Length < ChecksumOffset + 4)
+        {
+            return;
+        }
+
+        // The stored checksum and its complement always contribute 0x1FE to the
+        // byte total, so the recompute is stable with the existing pair present.
+        var checksum = 0;
+        foreach (var value in rom)
+        {
+            checksum += value;
+        }
+        checksum &= 0xFFFF;
+        var complement = checksum ^ 0xFFFF;
+
+        rom[ChecksumOffset] = (byte)(complement & 0xFF);
+        rom[ChecksumOffset + 1] = (byte)((complement >> 8) & 0xFF);
+        rom[ChecksumOffset + 2] = (byte)(checksum & 0xFF);
+        rom[ChecksumOffset + 3] = (byte)((checksum >> 8) & 0xFF);
+    }
+
+    private static PatchManifest? ReadManifest()
+    {
+        if (!File.Exists(AppPaths.PatchManifestPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<PatchManifest>(
+                File.ReadAllText(AppPaths.PatchManifestPath));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void WriteManifest(IReadOnlyList<string> patchIds, string sha256)
+    {
+        Directory.CreateDirectory(AppPaths.GamesDirectory);
+        var manifest = new PatchManifest
+        {
+            PatchIds = [.. patchIds],
+            Sha256 = sha256,
+        };
+        File.WriteAllText(
+            AppPaths.PatchManifestPath,
+            JsonSerializer.Serialize(
+                manifest,
+                new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static string HashFile(string path)
     {
         using var stream = File.OpenRead(path);
         return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    private static string HashBytes(byte[] data) =>
+        Convert.ToHexString(SHA256.HashData(data));
+
+    private sealed class PatchManifest
+    {
+        public string[] PatchIds { get; set; } = [];
+        public string Sha256 { get; set; } = string.Empty;
     }
 
     internal static void EnsureBizHawkConfig()
@@ -193,8 +329,13 @@ internal static class IpsPatcher
 {
     internal static void Apply(string romPath, string patchPath, string outputPath)
     {
-        var rom = File.ReadAllBytes(romPath).ToList();
-        var patch = File.ReadAllBytes(patchPath);
+        var patched = Apply(File.ReadAllBytes(romPath), File.ReadAllBytes(patchPath));
+        File.WriteAllBytes(outputPath, patched);
+    }
+
+    internal static byte[] Apply(byte[] source, byte[] patch)
+    {
+        var rom = source.ToList();
         if (patch.Length < 8 || Encoding.ASCII.GetString(patch, 0, 5) != "PATCH")
         {
             throw new InvalidOperationException("The bundled IPS patch is invalid.");
@@ -243,6 +384,6 @@ internal static class IpsPatcher
             }
         }
 
-        File.WriteAllBytes(outputPath, [.. rom]);
+        return [.. rom];
     }
 }
