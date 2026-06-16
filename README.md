@@ -154,8 +154,8 @@ selection is applied the next time you press `Play Game`.
 
 | Patch                     | Default | Description                                                                                                                                                                                                                                  |
 | ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bloody Disgusting Edition | On      | Restores uncensored red blood on the Game Over screen ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)). Edits only the blood-drip sprite tiles, so the purple transformation monster and other graphics stay untouched. |
-| Reverse Inventory Cycling | On      | Cycle weapons and items in both directions ([romhacking.net hack #4318](https://www.romhacking.net/hacks/4318/)). Enables the rewored control scheme below (configurable).                                                                               |
+| Bloody Disgusting Edition | On      | Restores censored red blood on the Game Over screen ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)). Edits only the blood-drip sprite tiles, so the purple transformation monster and other graphics stay untouched. |
+| Reverse Inventory Cycling | On      | Cycle weapons and items in both directions ([romhacking.net hack #4318](https://www.romhacking.net/hacks/4318/)). Enables the reworked control scheme below (configurable).                                                                               |
 
 ### Control schemes
 
@@ -163,7 +163,7 @@ The `Configure Controller` screen always matches the patch selection. With
 Reverse Inventory Cycling **off**, the stock layout is used; with it **on**, a
 reworked layout is used (configurable):
 
-| Control            | Stock (patch off) | Twin-stick (patch on)  |
+| Control            | Stock (patch off) | Rewored (patch on)  |
 | ------------------ | ----------------- | ---------------------- |
 | Left stick / D-pad | Move and aim      | Move and aim           |
 | Right stick        | Aim and fire      | Aim and fire           |
@@ -175,7 +175,7 @@ reworked layout is used (configurable):
 | LB / RB            | Radar on/off      | Item previous / next   |
 | Start              | Pause             | Pause                  |
 
-The rewored scheme reuses the patch's built-in "hold L to reverse" modifier
+The reworked scheme reuses the patch's built-in "hold L to reverse" modifier
 through button combos (the left trigger and bumper press the cycle button plus
 SNES L), so the bundled patch is applied unmodified. Every control above is
 re-bindable in `Configure Controller`.
