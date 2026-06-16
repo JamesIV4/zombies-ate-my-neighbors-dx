@@ -2,10 +2,9 @@
 
 This emulator-only mod for the USA SNES release adds:
 
-- 50% larger sprite interaction hitboxes, from 16x16 to 24x24 pixels.
-- 360-degree analog movement speed and direction on the left stick.
-- Independent right-stick aiming and firing in the game's eight native shot
-  directions.
+- True analog movement, speed and direction, on the left stick.
+- Independent right-stick aiming and firing in the game's eight native shot directions.
+- 50% larger sprite interaction hitboxes, so picking up items and hitting enemies is more consistent.
 
 It also bundles optional ROM patches you can mix in from the
 launcher's `Configure ROM Patches` screen: 
