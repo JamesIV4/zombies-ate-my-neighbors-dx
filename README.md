@@ -163,7 +163,7 @@ The `Configure Controller` screen always matches the patch selection. With
 Reverse Inventory Cycling **off**, the stock layout is used; with it **on**, a
 reworked layout is used (configurable):
 
-| Control            | Stock (patch off) | Rewored (patch on)  |
+| Control            | Stock (patch off) | Reworked (patch on)  |
 | ------------------ | ----------------- | ---------------------- |
 | Left stick / D-pad | Move and aim      | Move and aim           |
 | Right stick        | Aim and fire      | Aim and fire           |
