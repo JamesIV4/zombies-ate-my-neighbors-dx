@@ -1,5 +1,7 @@
 # Zombies Ate My Neighbors DX
 
+**[Download the latest release](https://github.com/JamesIV4/zombies-ate-my-neighbors-dx/releases/latest)**
+
 This emulator-only mod for the USA SNES release adds:
 
 - True analog movement, speed and direction, on the left stick.
