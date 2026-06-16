@@ -37,7 +37,7 @@ internal static class ModRuntime
         Directory.CreateDirectory(AppPaths.RuntimeDirectory);
         File.Copy(AppPaths.BundledLuaPath, AppPaths.RuntimeLuaPath, true);
         WriteLuaConfig(settings);
-        EnsureBizHawkConfig();
+        EnsureBizHawkConfig(settings, ControlSchemes.ForPatches(patches));
         SettingsStore.Save(settings);
     }
 
@@ -246,7 +246,7 @@ internal static class ModRuntime
         public string Sha256 { get; set; } = string.Empty;
     }
 
-    internal static void EnsureBizHawkConfig()
+    internal static void EnsureBizHawkConfig(ControllerSettings settings, ControlScheme scheme)
     {
         Directory.CreateDirectory(AppPaths.BizHawkUserDirectory);
 
@@ -288,10 +288,60 @@ internal static class ModRuntime
         luaConsoleSettings["FloatingWindow"] = false;
         luaConsoleSettings["AutoLoad"] = false;
 
+        WriteSnesControllerBindings(config, settings, scheme);
+
         File.WriteAllText(
             AppPaths.BizHawkConfigPath,
             config.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
             new UTF8Encoding(false));
+    }
+
+    // Map the active control scheme onto BizHawk's own SNES gamepad bindings so
+    // the emulator drives every button natively. A host control listed under
+    // several SNES buttons is a combo; comma-separated controls OR together.
+    // Buttons with no host are cleared so BizHawk's defaults cannot leak in.
+    private static void WriteSnesControllerBindings(
+        JsonObject config, ControllerSettings settings, ControlScheme scheme)
+    {
+        var controllers = config["AllTrollers"] as JsonObject ?? new JsonObject();
+        config["AllTrollers"] = controllers;
+        var snes = controllers["SNES Controller"] as JsonObject ?? new JsonObject();
+        controllers["SNES Controller"] = snes;
+
+        var buttonMap = BuildButtonMap(settings, scheme);
+        foreach (var snesButton in ControlSchemes.SnesButtons)
+        {
+            snes[$"P1 {snesButton}"] = string.Join(", ", buttonMap[snesButton]);
+        }
+    }
+
+    /// <summary>
+    /// Invert the action bindings into one host list per SNES button. A host
+    /// appearing under several SNES buttons is a combo (for example a trigger
+    /// that presses the cycle button plus the reverse modifier); several hosts
+    /// under one SNES button means any of them triggers it.
+    /// </summary>
+    internal static Dictionary<string, List<string>> BuildButtonMap(
+        ControllerSettings settings, ControlScheme scheme)
+    {
+        var snesHosts = ControlSchemes.SnesButtons.ToDictionary(name => name, _ => new List<string>());
+        foreach (var action in scheme.Actions)
+        {
+            if (!settings.Bindings.TryGetValue(action.Id, out var host) || string.IsNullOrWhiteSpace(host))
+            {
+                continue;
+            }
+
+            var qualified = $"{settings.Device} {host}";
+            foreach (var snes in action.SnesTargets)
+            {
+                if (snesHosts.TryGetValue(snes, out var hosts) && !hosts.Contains(qualified))
+                {
+                    hosts.Add(qualified);
+                }
+            }
+        }
+        return snesHosts;
     }
 
     private static void WriteLuaConfig(ControllerSettings settings)
@@ -301,6 +351,8 @@ internal static class ModRuntime
             return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
         }
 
+        // Buttons are handled by BizHawk's own config; the runtime only needs the
+        // stick axes plus device, deadzone, and inversion.
         var text = new StringBuilder();
         text.AppendLine("return {");
         text.AppendLine($"\tdevice = {Quote(settings.Device)},");
@@ -308,12 +360,6 @@ internal static class ModRuntime
         text.AppendLine($"\tinvert_left_y = {(!settings.InvertLeftY).ToString().ToLowerInvariant()},");
         text.AppendLine($"\tinvert_right_y = {(!settings.InvertRightY).ToString().ToLowerInvariant()},");
         text.AppendLine("\tenabled = true,");
-        text.AppendLine("\tbuttons = {");
-        foreach (var name in ControllerSettings.ButtonOrder)
-        {
-            text.AppendLine($"\t\t{name} = {Quote($"{settings.Device} {settings.Buttons[name]}")},");
-        }
-        text.AppendLine("\t},");
         text.AppendLine("\taxes = {");
         foreach (var name in ControllerSettings.AxisOrder)
         {

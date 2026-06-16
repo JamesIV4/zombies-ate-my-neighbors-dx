@@ -44,7 +44,22 @@ internal static class RomPatchCatalog
             Mandatory: false,
             DefaultEnabled: true,
             ExpectedSha256: "14C54077012147A146E0FA3EAEF1D2673A2B8493D71C40A126FA2A843E557374"),
+        new RomPatch(
+            Id: "reverse-cycling",
+            Name: "Reverse Inventory Cycling",
+            Description: "Cycle weapons and items in both directions "
+                + "(romhacking.net hack #4318). Enables the twin-stick-friendly "
+                + "control scheme: weapons on the triggers, items on the bumpers.",
+            FileName: "reverse-inventory-cycling.ips",
+            Mandatory: false,
+            DefaultEnabled: true,
+            ExpectedSha256: "2CB1E64CFFB4529F6593CEA815E53C9DE4033DB586D0B3E4FBDAEEC4D58E2237"),
     ];
+
+    internal const string ReverseCyclingId = "reverse-cycling";
+
+    internal static RomPatch ReverseCyclingPatch =>
+        Optional.Single(patch => patch.Id == ReverseCyclingId);
 
     /// <summary>Base first, then optional patches in their declared order.</summary>
     internal static IEnumerable<RomPatch> All => Optional.Prepend(Base);

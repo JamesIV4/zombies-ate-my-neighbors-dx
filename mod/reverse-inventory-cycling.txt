@@ -1,0 +1,38 @@
+Zombies Ate My Neighbors - Reverse Inventory Cycling
+====================================================
+
+Optional improvement bundled with Zombies Ate My Neighbors DX.
+
+Source: https://www.romhacking.net/hacks/4318/
+File:   reverse-inventory-cycling.ips
+SHA-256 of patch: 2CB1E64CFFB4529F6593CEA815E53C9DE4033DB586D0B3E4FBDAEEC4D58E2237
+
+What it does
+------------
+Stock Zombies Ate My Neighbors can only cycle weapons and special items in one
+direction. This hack lets you cycle either way: it hooks the two inventory-cycle
+routines and, while the SNES L button is held, steps backwards instead of
+forwards. To free L for that role the patch also moves the radar toggle off L
+onto R (and Select). The hook code lives in unused ROM space at $9F:FF52, so it
+does not disturb the DX or Bloody Disgusting patches.
+
+This IPS targets the headerless USA ROM
+(MD5 23C2AF7897D9384C4791189B68C142EB), the same ROM ZAMN DX requires.
+
+Control scheme in ZAMN DX
+-------------------------
+When this patch is enabled the launcher switches the controller to a twin-stick
+layout (configurable under "Configure Controller"):
+
+  LT / RT : Weapon previous / next   (RT presses SNES B; LT presses B + L)
+  LB / RB : Item previous / next     (RB presses SNES A; LB presses A + L)
+  X / A   : Fire weapon
+  B       : Radar / Map
+  Y       : Use item
+  Start   : Pause
+
+Disabling the patch restores the stock control layout automatically.
+
+Credit for this hack belongs to its original author on romhacking.net; it is
+redistributed here for player convenience. See the hack page above for the full
+author notes.

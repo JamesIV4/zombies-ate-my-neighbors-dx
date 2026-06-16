@@ -25,10 +25,51 @@ Check(XInput.DetectAxis(axis) == "RightThumbX Axis", "right X axis detection");
 
 var settings = ControllerSettings.CreateDefault();
 var clone = settings.Clone();
-clone.Buttons["Y"] = "B";
-Check(settings.Buttons["Y"] == "X", "settings clone isolation");
+clone.Bindings["fire"] = "B";
+Check(settings.Bindings["fire"] == "X", "settings clone isolation");
+Check(settings.Bindings["use_item"] == "Y", "stock use-item default binding");
+
+var stock = ControlSchemes.Stock;
+var reverse = ControlSchemes.ReverseCycling;
+Check(stock.Actions.Any(a => a.Id == "change_weapon"), "stock scheme has change weapon");
+Check(
+    reverse.Actions.Single(a => a.Id == "weapon_prev").SnesTargets.SequenceEqual(new[] { "B", "L" }),
+    "weapon previous presses cycle + reverse modifier");
+Check(
+    reverse.Actions.Single(a => a.Id == "weapon_next").DefaultHost == "RightTrigger",
+    "weapon next defaults to the right trigger");
+Check(
+    ControlSchemes.ForPatches(new PatchSettings { Enabled = [] }) == ControlSchemes.Stock,
+    "no reverse patch keeps stock scheme");
+Check(
+    ControlSchemes.AllActions.All(a => settings.Bindings.ContainsKey(a.Id)),
+    "default bindings cover every action");
+
+var reverseMap = ModRuntime.BuildButtonMap(settings, reverse);
+Check(
+    reverseMap["B"].SequenceEqual(new[] { "X1 RightTrigger", "X1 LeftTrigger" }),
+    "weapon cycle driven by both triggers");
+Check(
+    reverseMap["L"].SequenceEqual(new[] { "X1 LeftTrigger", "X1 LeftShoulder" }),
+    "reverse modifier driven by LT and LB");
+Check(
+    reverseMap["A"].SequenceEqual(new[] { "X1 RightShoulder", "X1 LeftShoulder" }),
+    "item cycle driven by both bumpers");
+Check(
+    reverseMap["Y"].SequenceEqual(new[] { "X1 X", "X1 A" }),
+    "fire driven by west and south face buttons");
+Check(reverseMap["R"].SequenceEqual(new[] { "X1 B" }), "map driven by east face button");
+Check(reverseMap["X"].SequenceEqual(new[] { "X1 Y" }), "use item driven by north face button");
+Check(reverseMap["Select"].Count == 0, "select unused in reverse scheme");
+
+var stockMap = ModRuntime.BuildButtonMap(settings, stock);
+Check(stockMap["B"].SequenceEqual(new[] { "X1 A" }), "stock change weapon on physical A");
+Check(stockMap["L"].SequenceEqual(new[] { "X1 LeftShoulder" }), "stock radar on left bumper");
 
 Check(RomPatchCatalog.Base is { Mandatory: true, Id: "dx" }, "base patch is mandatory");
+var reverseCycling = RomPatchCatalog.Optional.SingleOrDefault(patch => patch.Id == "reverse-cycling");
+Check(reverseCycling is { Mandatory: false } && reverseCycling.ExpectedSha256?.Length == 64,
+    "reverse-cycling patch registered with integrity hash");
 var bloody = RomPatchCatalog.Optional.SingleOrDefault(patch => patch.Id == "bloody");
 Check(bloody is { Mandatory: false, DefaultEnabled: true }, "bloody patch optional and default on");
 Check(
@@ -62,9 +103,18 @@ if (!string.IsNullOrWhiteSpace(expectedPatchedRomHash))
         "patched ROM hash MSBuild injection");
 }
 
-ModRuntime.EnsureBizHawkConfig();
+ModRuntime.EnsureBizHawkConfig(ControllerSettings.CreateDefault(), ControlSchemes.ReverseCycling);
 var bizHawkConfig = File.ReadAllText(AppPaths.BizHawkConfigPath);
 Check(bizHawkConfig.Contains("\"FirstBoot\": false"), "BizHawk onboarding disabled");
+Check(
+    bizHawkConfig.Contains("\"P1 B\": \"X1 RightTrigger, X1 LeftTrigger\""),
+    "BizHawk SNES weapon cycle bound to both triggers");
+Check(
+    bizHawkConfig.Contains("\"P1 R\": \"X1 B\""),
+    "BizHawk SNES radar bound to the east face button");
+Check(
+    bizHawkConfig.Contains("\"P1 Select\": \"\""),
+    "BizHawk SNES select cleared so defaults cannot leak");
 Check(
     bizHawkConfig.Contains("\"AcceptBackgroundInputControllerOnly\": true"),
     "BizHawk controller background input enabled");

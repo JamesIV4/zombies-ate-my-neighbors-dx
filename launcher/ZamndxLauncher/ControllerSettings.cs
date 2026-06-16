@@ -8,14 +8,14 @@ internal sealed class ControllerSettings
     public double Deadzone { get; set; } = 0.18;
     public bool InvertLeftY { get; set; } = false;
     public bool InvertRightY { get; set; } = false;
-    public Dictionary<string, string> Buttons { get; set; } = DefaultButtons();
-    public Dictionary<string, string> Axes { get; set; } = DefaultAxes();
 
-    internal static readonly string[] ButtonOrder =
-    [
-        "Up", "Down", "Left", "Right", "Start", "Select",
-        "Y", "B", "A", "X", "L", "R",
-    ];
+    /// <summary>
+    /// Host control assigned to each control-scheme action id (for example
+    /// "fire" or "weapon_prev"). Stored without the device prefix; the runtime
+    /// writer prepends the active device.
+    /// </summary>
+    public Dictionary<string, string> Bindings { get; set; } = DefaultBindings();
+    public Dictionary<string, string> Axes { get; set; } = DefaultAxes();
 
     internal static readonly string[] AxisOrder =
     [
@@ -32,26 +32,20 @@ internal sealed class ControllerSettings
             Deadzone = Deadzone,
             InvertLeftY = InvertLeftY,
             InvertRightY = InvertRightY,
-            Buttons = new Dictionary<string, string>(Buttons),
+            Bindings = new Dictionary<string, string>(Bindings),
             Axes = new Dictionary<string, string>(Axes),
         };
     }
 
-    private static Dictionary<string, string> DefaultButtons() => new()
+    internal static Dictionary<string, string> DefaultBindings()
     {
-        ["Up"] = "DpadUp",
-        ["Down"] = "DpadDown",
-        ["Left"] = "DpadLeft",
-        ["Right"] = "DpadRight",
-        ["Start"] = "Start",
-        ["Select"] = "Back",
-        ["Y"] = "X",
-        ["B"] = "A",
-        ["A"] = "B",
-        ["X"] = "Y",
-        ["L"] = "LeftShoulder",
-        ["R"] = "RightShoulder",
-    };
+        var bindings = new Dictionary<string, string>();
+        foreach (var action in ControlSchemes.AllActions)
+        {
+            bindings[action.Id] = action.DefaultHost;
+        }
+        return bindings;
+    }
 
     private static Dictionary<string, string> DefaultAxes() => new()
     {
@@ -107,14 +101,14 @@ internal static class SettingsStore
         }
 
         settings.Deadzone = Math.Clamp(settings.Deadzone, 0.05, 0.90);
-        settings.Buttons ??= [];
+        settings.Bindings ??= [];
         settings.Axes ??= [];
 
-        foreach (var name in ControllerSettings.ButtonOrder)
+        foreach (var action in ControlSchemes.AllActions)
         {
-            if (!settings.Buttons.TryGetValue(name, out var value) || string.IsNullOrWhiteSpace(value))
+            if (!settings.Bindings.TryGetValue(action.Id, out var value) || string.IsNullOrWhiteSpace(value))
             {
-                settings.Buttons[name] = defaults.Buttons[name];
+                settings.Bindings[action.Id] = defaults.Bindings[action.Id];
             }
         }
 

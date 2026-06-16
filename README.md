@@ -8,9 +8,11 @@ This emulator-only mod for the USA SNES release adds:
   directions.
 
 It also bundles optional, toggleable ROM patches you can mix in from the
-launcher's `Configure ROM Patches` screen. The first of these is the
-**Bloody Disgusting Edition** ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)),
-which restores the uncensored red blood on the Game Over screen.
+launcher's `Configure ROM Patches` screen: the **Bloody Disgusting Edition**
+([hack #4306](https://www.romhacking.net/hacks/4306/)), which restores the
+uncensored red blood on the Game Over screen, and **Reverse Inventory Cycling**
+([hack #4318](https://www.romhacking.net/hacks/4318/)), which lets you cycle
+weapons and items in both directions and enables a reworked control layout.
 
 The ROM patch retains the original wall collision, enemy, item, camera, tile,
 and weapon code. The controller layer translates analog input into per-frame
@@ -148,9 +150,33 @@ The DX core patch is always applied. Optional improvements are listed under
 `Configure ROM Patches` and can be turned on or off independently; the new
 selection is applied the next time you press `Play Game`.
 
-| Patch | Default | Description |
-| --- | --- | --- |
-| Bloody Disgusting Edition | On | Restores uncensored red blood on the Game Over screen ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)). Edits only the blood-drip sprite tiles, so the purple transformation monster and other graphics stay untouched. |
+| Patch                     | Default | Description                                                                                                                                                                                                                                  |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bloody Disgusting Edition | On      | Restores uncensored red blood on the Game Over screen ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)). Edits only the blood-drip sprite tiles, so the purple transformation monster and other graphics stay untouched. |
+| Reverse Inventory Cycling | On      | Cycle weapons and items in both directions ([romhacking.net hack #4318](https://www.romhacking.net/hacks/4318/)). Enables the twin-stick control scheme below.                                                                               |
+
+### Control schemes
+
+The `Configure Controller` screen always matches the patch selection. With
+Reverse Inventory Cycling **off**, the stock layout is used; with it **on**, a
+twin-stick layout is used:
+
+| Control            | Stock (patch off) | Twin-stick (patch on)  |
+| ------------------ | ----------------- | ---------------------- |
+| Left stick / D-pad | Move and aim      | Move and aim           |
+| Right stick        | Aim and fire      | Aim and fire           |
+| X (west)           | Fire weapon       | Fire weapon            |
+| A (south)          | Change weapon     | Fire weapon            |
+| B (east)           | Change item       | Radar / Map            |
+| Y (north)          | Use item          | Use item               |
+| LT / RT            | —                 | Weapon previous / next |
+| LB / RB            | Radar on/off      | Item previous / next   |
+| Start              | Pause             | Pause                  |
+
+The twin-stick scheme reuses the patch's built-in "hold L to reverse" modifier
+through button combos (the left trigger and bumper press the cycle button plus
+SNES L), so the bundled patch is applied unmodified. Every control above is
+re-bindable in `Configure Controller`.
 
 The launcher rebuilds the patched ROM whenever your selection changes. It first
 applies the DX core patch and verifies it against the published DX hash, then

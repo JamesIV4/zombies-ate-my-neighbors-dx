@@ -135,7 +135,7 @@ internal sealed class MainForm : Form
 
     private void ConfigureController()
     {
-        using var form = new ControllerForm(_settings);
+        using var form = new ControllerForm(_settings, ControlSchemes.ForPatches(_patches));
         if (form.ShowDialog(this) == DialogResult.OK && form.SavedSettings is not null)
         {
             _settings = form.SavedSettings;

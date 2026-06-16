@@ -18,11 +18,6 @@ end
 local script_directory = string.match(script_source, "^(.*[\\/])") or ""
 local config_path = script_directory .. "zamndx-controller-config.lua"
 
-local button_order = {
-	"Up", "Down", "Left", "Right", "Start", "Select",
-	"Y", "B", "A", "X", "L", "R",
-}
-
 local directions = {
 	{ code = 0x06, buttons = { "Right" } },
 	{ code = 0x04, buttons = { "Right", "Up" } },
@@ -41,20 +36,9 @@ local function default_settings()
 		invert_left_y = true,
 		invert_right_y = true,
 		enabled = true,
-		buttons = {
-			Up = "X1 DpadUp",
-			Down = "X1 DpadDown",
-			Left = "X1 DpadLeft",
-			Right = "X1 DpadRight",
-			Start = "X1 Start",
-			Select = "X1 Back",
-			Y = "X1 X",
-			B = "X1 A",
-			A = "X1 B",
-			X = "X1 Y",
-			L = "X1 LeftShoulder",
-			R = "X1 RightShoulder",
-		},
+		-- All SNES buttons are mapped through BizHawk's own controller config by
+		-- the launcher. This runtime only owns analog movement and right-stick
+		-- aiming, which BizHawk cannot express natively.
 		axes = {
 			left_x = "X1 LeftThumbX Axis",
 			left_y = "X1 LeftThumbY Axis",
@@ -226,17 +210,6 @@ local function apply_analog_movement(overrides, x, y, magnitude)
 	return true, x_delta, y_delta
 end
 
-local function mapped_button_overrides(host_buttons)
-	local overrides = {}
-	for _, snes_name in ipairs(button_order) do
-		local host_name = settings.buttons[snes_name]
-		if host_name and host_name ~= "" and host_buttons[host_name] then
-			overrides[snes_name] = true
-		end
-	end
-	return overrides
-end
-
 local function cleanup()
 	release_overrides()
 end
@@ -246,8 +219,9 @@ event.onexit(cleanup, "ZAMN DX controller cleanup")
 console.log("ZAMN DX: controller runtime loaded for " .. settings.device)
 
 while true do
-	local host_buttons = input.get()
 	local axes = input.get_pressed_axes()
+	-- Only the movement direction (for facing/animation) and the aim/fire button
+	-- are overridden here; BizHawk applies every other button from its own config.
 	local overrides = {}
 	local aim_active = false
 	local movement_active = false
@@ -255,8 +229,6 @@ while true do
 	local movement_y = 0
 
 	if settings.enabled then
-		overrides = mapped_button_overrides(host_buttons)
-
 		local left_x = read_axis("left_x", axes)
 		local left_y = read_axis("left_y", axes)
 		local right_x = read_axis("right_x", axes)

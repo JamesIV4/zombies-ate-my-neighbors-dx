@@ -4,6 +4,12 @@ internal sealed class ControllerForm : Form
 {
     private static readonly Dictionary<string, string> FriendlyNames = new()
     {
+        ["A"] = "A (south)",
+        ["B"] = "B (east)",
+        ["X"] = "X (west)",
+        ["Y"] = "Y (north)",
+        ["Start"] = "Start",
+        ["Back"] = "Back",
         ["DpadUp"] = "D-pad Up",
         ["DpadDown"] = "D-pad Down",
         ["DpadLeft"] = "D-pad Left",
@@ -29,6 +35,7 @@ internal sealed class ControllerForm : Form
     };
 
     private readonly ControllerSettings _settings;
+    private readonly ControlScheme _scheme;
     private readonly Dictionary<string, Label> _bindingLabels = [];
     private readonly Label _connection;
     private readonly Label _activity;
@@ -43,12 +50,13 @@ internal sealed class ControllerForm : Form
 
     internal ControllerSettings? SavedSettings { get; private set; }
 
-    internal ControllerForm(ControllerSettings current)
+    internal ControllerForm(ControllerSettings current, ControlScheme scheme)
     {
         _settings = current.Clone();
+        _scheme = scheme;
 
         Text = "Configure Controller";
-        ClientSize = new Size(860, 690);
+        ClientSize = new Size(860, 736);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -130,8 +138,7 @@ internal sealed class ControllerForm : Form
         monitor.Controls.Add(_activity);
         Controls.Add(monitor);
 
-        Controls.Add(Theme.Label("ANALOG STICKS", 30, 276, 180, 22, 10, Theme.Purple, FontStyle.Bold));
-        Controls.Add(Theme.Label("SNES BUTTONS", 30, 378, 180, 22, 10, Theme.Purple, FontStyle.Bold));
+        Controls.Add(Theme.Label("ANALOG STICKS", 30, 268, 180, 22, 10, Theme.Purple, FontStyle.Bold));
 
         (string Name, string Label)[] axes =
         [
@@ -143,49 +150,43 @@ internal sealed class ControllerForm : Form
         for (var index = 0; index < axes.Length; index++)
         {
             var x = 30 + index % 2 * 400;
-            var y = 306 + index / 2 * 38;
-            AddBindingRow(axes[index].Name, axes[index].Label, "axis", x, y, _settings.Axes[axes[index].Name]);
+            var y = 294 + index / 2 * 36;
+            AddBindingRow("axis", axes[index].Name, axes[index].Label, x, y, _settings.Axes[axes[index].Name]);
         }
 
-        (string Name, string Label)[] buttons =
-        [
-            ("Up", "Move Up"),
-            ("Down", "Move Down"),
-            ("Left", "Move Left"),
-            ("Right", "Move Right"),
-            ("Start", "Start"),
-            ("Select", "Select"),
-            ("Y", "Fire / Use"),
-            ("B", "Cancel"),
-            ("A", "Item"),
-            ("X", "Cycle Item"),
-            ("L", "Previous Weapon"),
-            ("R", "Next Weapon"),
-        ];
-        for (var index = 0; index < buttons.Length; index++)
+        Controls.Add(Theme.Label(
+            $"BUTTONS  -  layout: {_scheme.Name}", 30, 372, 520, 22, 10, Theme.Purple, FontStyle.Bold));
+        Controls.Add(Theme.Label(
+            "This layout follows your ROM Patches selection.",
+            30, 398, 520, 20, 9, Theme.Muted));
+
+        var actions = _scheme.Actions;
+        var perColumn = (actions.Count + 1) / 2;
+        for (var index = 0; index < actions.Count; index++)
         {
-            var column = index / 6;
-            var row = index % 6;
+            var action = actions[index];
+            var column = index / perColumn;
+            var row = index % perColumn;
             AddBindingRow(
-                buttons[index].Name,
-                buttons[index].Label,
                 "button",
+                action.Id,
+                action.Label,
                 30 + column * 400,
-                407 + row * 36,
-                _settings.Buttons[buttons[index].Name]);
+                426 + row * 34,
+                _settings.Bindings[action.Id]);
         }
 
-        _captureStatus = Theme.Label("Ready", 30, 628, 390, 26, 10, Theme.Muted, FontStyle.Bold);
+        _captureStatus = Theme.Label("Ready", 30, 692, 390, 26, 10, Theme.Muted, FontStyle.Bold);
         Controls.Add(_captureStatus);
 
         var defaults = Theme.Button(
-            "Restore Defaults", 445, 622, 130, 38,
+            "Restore Defaults", 445, 686, 130, 38,
             Theme.SurfaceRaised, Theme.Text, Theme.Purple);
         defaults.Click += (_, _) => RestoreDefaults();
         Controls.Add(defaults);
 
         var cancel = Theme.Button(
-            "Cancel", 588, 622, 90, 38,
+            "Cancel", 588, 686, 90, 38,
             Theme.SurfaceRaised, Theme.Text, Theme.Purple);
         cancel.Click += (_, _) =>
         {
@@ -195,7 +196,7 @@ internal sealed class ControllerForm : Form
         Controls.Add(cancel);
 
         var save = Theme.Button(
-            "Save", 691, 622, 139, 38,
+            "Save", 691, 686, 139, 38,
             Theme.Lime, Theme.Background, Theme.LimeHover);
         save.Click += (_, _) =>
         {
@@ -228,24 +229,24 @@ internal sealed class ControllerForm : Form
     }
 
     private void AddBindingRow(
-        string name,
-        string label,
         string kind,
+        string target,
+        string label,
         int x,
         int y,
         string binding)
     {
-        Controls.Add(Theme.Label(label, x, y + 7, 120, 22, 9.5f, Theme.Text));
-        var value = Theme.Label(Friendly(binding), x + 124, y + 7, 150, 22, 9.5f, Theme.Muted);
-        _bindingLabels[name] = value;
+        Controls.Add(Theme.Label(label, x, y + 6, 124, 22, 9.5f, Theme.Text));
+        var value = Theme.Label(Friendly(binding), x + 128, y + 6, 150, 22, 9.5f, Theme.Muted);
+        _bindingLabels[target] = value;
         Controls.Add(value);
 
         var capture = Theme.Button(
-            "Capture", x + 286, y, 86, 30,
+            "Capture", x + 286, y, 86, 28,
             Theme.SurfaceRaised, Theme.Text, Theme.Purple);
         capture.Click += (_, _) =>
         {
-            _capture = new CaptureRequest(kind, name, false);
+            _capture = new CaptureRequest(kind, target, false);
             SetCaptureStatus("Release all controls...", Theme.Lime);
         };
         Controls.Add(capture);
@@ -312,7 +313,7 @@ internal sealed class ControllerForm : Form
         }
         else
         {
-            _settings.Buttons[_capture.Target] = binding;
+            _settings.Bindings[_capture.Target] = binding;
         }
 
         _bindingLabels[_capture.Target].Text = Friendly(binding);
@@ -327,15 +328,15 @@ internal sealed class ControllerForm : Form
         _settings.Deadzone = defaults.Deadzone;
         _settings.InvertLeftY = defaults.InvertLeftY;
         _settings.InvertRightY = defaults.InvertRightY;
-        _settings.Buttons = new Dictionary<string, string>(defaults.Buttons);
+        _settings.Bindings = new Dictionary<string, string>(defaults.Bindings);
         _settings.Axes = new Dictionary<string, string>(defaults.Axes);
         _deadzone.Value = (int)Math.Round(_settings.Deadzone * 100);
         _invertLeft.Checked = _settings.InvertLeftY;
         _invertRight.Checked = _settings.InvertRightY;
 
-        foreach (var name in ControllerSettings.ButtonOrder)
+        foreach (var action in _scheme.Actions)
         {
-            _bindingLabels[name].Text = Friendly(_settings.Buttons[name]);
+            _bindingLabels[action.Id].Text = Friendly(_settings.Bindings[action.Id]);
         }
         foreach (var name in ControllerSettings.AxisOrder)
         {
