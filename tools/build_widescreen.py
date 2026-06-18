@@ -6,8 +6,8 @@ only streams BG tiles for the 256px window, so bsnes-hd's extra side columns sho
 stale VRAM. This hook refills the columns just outside the 256px window from the
 level map so the widescreen strips show correct terrain. BG streaming and OAM X
 culling are display-only; the optional object-spawner relax intentionally widens
-the normal map-object activation/deactivation X gate so pickups/survivors can be
-created while still in the widescreen side strips.
+the normal map-object and victim activation/deactivation X gates so pickups and
+neighbors can be created while still in the widescreen side strips.
 
 Two hooks:
   * GATHER  - at the per-frame scroll dispatcher $80:A93F (a proven-safe, register-
@@ -27,8 +27,8 @@ Two hooks:
               ($FFFF) so it is not re-uploaded, then lets the drain DMA them and zero
               $CE so the game's "wait for queue empty" spin-waits still complete.
   * SPRITES - the OAM X-culls are widened for already-rendered actors, and the
-              map-object activation/deactivation X gate is widened so object
-              spawners for pickups/survivors wake up while still in the side strips.
+              map-object/victim activation X gates are widened so pickups and
+              neighbors wake up while still in the side strips.
               The render-list build also appends active type-$05 objects that are
               already in object slots but missing from $137E just outside the
               normal horizontal window.
@@ -85,6 +85,7 @@ FULLJMP = 4                 # >= this many tiles moved in one frame -> full refi
 # game still culls truly off-screen sprites). Matches the BG strip width.
 SPRITE_MARGIN = NSTRIP * 8
 OBJECT_ACTIVATION_MARGIN = SPRITE_MARGIN
+VICTIM_ACTIVATION_MARGIN = SPRITE_MARGIN
 TYPE05_SLOT_FIRST = 0x185E
 TYPE05_SLOT_END = 0x1ADE       # one past $1ACA + $14
 RENDER_ARRAY_MAX = 0x40        # $137E..$13BD, 32 object pointers
@@ -737,6 +738,19 @@ def main() -> int:
         raise SystemExit(f"unexpected object scan cadence bytes at 0x{object_scan_cadence_off:05X}: {orig.hex(' ')}")
     rom[object_scan_cadence_off + 4:object_scan_cadence_off + 6] = b"\x00\x00"
 
+    # Victims/neighbors use a separate bank-$81 definition scanner. It compares
+    # abs(victimX - (camX+$80)) against $00A0, which makes left-side victims spawn
+    # at about screen X=-31. Widen only that horizontal gate by the strip margin;
+    # keep the following Y gate stock so this remains a horizontal widescreen fix.
+    victim_x_gate_off = 0x823C  # $81:823C  CMP #$00A0 / BCS outside
+    orig = bytes(rom[victim_x_gate_off:victim_x_gate_off + 5])
+    if orig != bytes.fromhex("C9 A0 00 B0 2A"):
+        raise SystemExit(f"unexpected victim X-gate bytes at 0x{victim_x_gate_off:05X}: {orig.hex(' ')}")
+    victim_threshold = 0x00A0 + VICTIM_ACTIVATION_MARGIN
+    if victim_threshold > 0xFFFF:
+        raise SystemExit(f"victim activation threshold too large: 0x{victim_threshold:04X}")
+    rom[victim_x_gate_off + 1:victim_x_gate_off + 3] = victim_threshold.to_bytes(2, "little")
+
     # --- sprite X-cull relax: route the 4 OAM-build cull sites through ws_sprite_cull ---
     # Original 22 bytes: CMP #$0100 / BCC draw / CMP #$FFF1 / BCC cull / set-X-high(12).
     # New 22 bytes, keeping each site's own set-high (sites 1-3 ORA, site 4 EOR):
@@ -790,6 +804,7 @@ def main() -> int:
     print(f"ws_sprite_cull: ${labels['ws_sprite_cull']:06X}  (4 cull sites, margin {SPRITE_MARGIN}px)")
     print(f"object X gate : $80:C948  threshold ${object_threshold:04X} (stock $0090)")
     print("object scanner: $80:C91C  every wake (stock every 4 ticks)")
+    print(f"victim X gate : $81:823C  threshold ${victim_threshold:04X} (stock $00A0)")
     print(f"test ROM      : {out_rom}")
     print(f"widescreen IPS: {out_ips} ({len(ips)} bytes)")
     print(f"SHA-256       : {build.digest(bytes(rom), 'sha256')}")

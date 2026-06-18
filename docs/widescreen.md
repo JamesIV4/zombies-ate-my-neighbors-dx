@@ -32,9 +32,9 @@ background and sprites. So widescreen has two parts:
    columns filled from the level map.
 
 The BG streaming and OAM X-cull pieces are **display-only**: bsnes-hd renders more
-of the world the game already simulates. The item/survivor work is the exception:
-it intentionally widens the stock map-object activation/deactivation X gate so
-map-object spawners can wake while still inside the widescreen side strips.
+of the world the game already simulates. The item/neighbor work is the exception:
+it intentionally widens the stock map-object and victim activation/deactivation X
+gates so spawners can wake while still inside the widescreen side strips.
 
 ### POC result (user, in standalone bsnes-hd)
 Loading **unpatched** ZAMN in bsnes-hd with widescreen + "render sprites anywhere":
@@ -140,14 +140,14 @@ patch draws them (`right=3, left=5` in a sample), with identical actor positions
 That OAM-X-cull fixed **enemies/player/projectiles**. **Items & survivors are a separate,
 deeper case** (the cull above does not affect them) — investigation below.
 
-### Sprites part 2: items, survivors, and map-object spawners
+### Sprites part 2: items, neighbors, and spawners
 
 **Update from the user savestate (2026-06-18):** the "type `$05` items/survivors"
 theory was too narrow. In the saved left-walk scene, the edge objects are map-object
 types such as `$0C`, `$01`, `$00`, and `$21`; type `$05` is centered on the player.
 The relevant problem is upstream activation, not the final OAM cull: inactive
-map-object templates already hold the correct sprite/type/X/Y data, but stock ZAMN
-does not activate them until the scanner sees them near the 4:3 window.
+map-object/victim definitions already hold the correct sprite/type/X/Y data, but
+stock ZAMN does not activate them until the scanner sees them near the 4:3 window.
 
 Implemented fix:
 - `$80:C948` map-object X proximity gate widened from `CMP #$0090` to
@@ -157,13 +157,21 @@ Implemented fix:
 - `$80:C91C` scanner cadence changed from `($20 & 3) == 0` to every task wake. The
   task still yields normally, but mid-cycle saves no longer wait several ticks before
   the widened pass can pick up a strip object.
+- `$81:823C` victim/neighbor definition scanner X gate widened from `CMP #$00A0`
+  to `CMP #$00F0` (`$00A0 + SPRITE_MARGIN`). Stock wakes left-side victims at about
+  `screenX=-31`; the widened gate covers about `screenX=-111` while leaving the
+  vertical gate unchanged.
 - User savestate verification now shows type `$0C` active/emitting left-strip OAM
   from frame 1 at `objScreen=(-45,40)` / `tileX=-51`; before this patch it first
   emitted strip tiles around frame 19 at `objScreen=(-9,40)`.
+- The later neighbor save now shows a type `$01` neighbor rendered in the left strip
+  by frame 10 at `screenX=-63`. A DP-aware scanner proof (`mesen_savestate_victim_gate_verify.lua`)
+  resets only emulator RAM and catches the same cheerleader candidate at `screen=(-79,74)`,
+  then initialized at `screen=(-77,74)`.
 
 The older type-`$05` render-list relax remains in the current build as a synthetic
-display-only bypass for active unlisted slots, but the real saved-scene fix is the
-map-object activation gate above.
+display-only bypass for active unlisted slots, but the real saved-scene fixes are the
+map-object and victim activation gates above.
 
 #### Earlier type-`$05` investigation (kept for reference)
 
@@ -301,15 +309,18 @@ smoothness is the remaining user check.
 | `tools/diagnostics/mesen_route_trace.lua` | Logs camera/player movement for deterministic route debugging. |
 | `tools/diagnostics/mesen_savestate_object_sweep.lua` | Loads the user savestate and dumps active/rendered object slots while walking left. |
 | `tools/diagnostics/mesen_savestate_sprite_cull_trace.lua` | Buckets patched OAM-cull calls by object type for the user savestate. |
+| `tools/diagnostics/mesen_savestate_final_oam.lua` | Confirms strip sprites survive into final 9-bit SNES OAM entries. |
 | `tools/diagnostics/mesen_savestate_spawn_trace.lua` | Traces object-slot activation writes in the user savestate. |
 | `tools/diagnostics/mesen_savestate_target_slot_trace.lua` | Focused write trace for the specific late-spawning slots in the user savestate. |
 | `tools/diagnostics/mesen_savestate_a13e_callers.lua` | Identifies which bank-`$83` initializer callers create the saved-scene child objects. |
+| `tools/diagnostics/mesen_savestate_victim_trace.lua` | Dumps victim-task scheduler/DP state for the left-strip neighbor save. |
+| `tools/diagnostics/mesen_savestate_victim_gate_verify.lua` | Diagnostic-only RAM reset proving the widened victim scanner wakes the saved-scene cheerleader in the strip. |
 
 **MesenCE Lua API (for the above):** memory/exec callbacks via
 `emu.addMemoryCallback(fn, emu.callbackType.{read,write,exec}, start, end, emu.cpuType.snes, emu.memType.X)`
 — for the OAM shadow use `memType=snesWorkRam` with WRAM offsets; for exec use
 `memType=snesMemory` with the 24-bit code address (e.g. `0x80BD79`). Read registers in a
-callback with `emu.getCpuState(emu.cpuType.snes)` (`.k/.pc/.x/.y/.sp/.dbr`); `emu.getState()`
+callback with `emu.getCpuState(emu.cpuType.snes)` (`.k/.pc/.x/.y/.d/.sp/.dbr`); `emu.getState()`
 is a flat table with dotted keys (`"cpu.pc"`), so `.cpu` is nil — use `getCpuState`.
 
 **Mesen headless** (the key debugging unlock) — this build is **MesenCE**, a GUI-
@@ -351,10 +362,11 @@ anywhere). Walk around and watch the leading edges fill with correct terrain.
 - [x] **Sprites (enemies/player/projectiles)** — OAM X-cull relaxed to ±80 px
       (§4 *Sprites*); Mesen-confirmed the strip X-ranges go from 0 (stock) to non-zero
       (patched). Display-only. User-confirmed in bsnes-hd.
-- [x] **Sprites (items & survivors / map-object spawners)** - widened the `$80:C948`
-      map-object X activation/deactivation gate to `$00E0` and made the scanner run
-      each task wake; user savestate now emits type `$0C` left-strip OAM from frame 1
-      at `objScreen=(-45,40)` / `tileX=-51`.
+- [x] **Sprites (items & neighbors / spawners)** - widened the `$80:C948`
+      map-object X activation/deactivation gate to `$00E0`, made that scanner run
+      each task wake, and widened the `$81:823C` victim scanner X gate to `$00F0`.
+      User savestates now emit type `$0C` item/map-object OAM from frame 1 and
+      type `$01` neighbor OAM in the left strip by frame 10 at `screenX=-63`.
 - [ ] **bsnes-hd visual confirmation for items/neighbors** - user should verify the
       saved left-walk scene and a fresh approach path in standalone bsnes-hd.
 - [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment; level edges.
