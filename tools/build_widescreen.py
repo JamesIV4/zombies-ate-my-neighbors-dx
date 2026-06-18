@@ -73,6 +73,11 @@ TRICKLE = 8                 # round-robin columns refreshed per frame (vertical/
 LEADCAP = 3                 # max leading columns gathered on a horizontal crossing
 FULLJMP = 4                 # >= this many tiles moved in one frame -> full refill
 
+# How far past the 256px window (in px) the OAM-build engine is allowed to draw a
+# sprite, so active actors in the widescreen strips are rendered (display-only; the
+# game still culls truly off-screen sprites). Matches the BG strip width.
+SPRITE_MARGIN = NSTRIP * 8
+
 # WRAM scratch, all in free high $7F. In the gather DB=$7F so these are 4-hex ("abs")
 # operands; in the enqueue DB=0 so the few it needs are written as 6-hex ("long").
 COLBUF = 0xF000            # NSLOT columns * 64 bytes -> $7F:F000.. (must clear SB)
@@ -472,6 +477,33 @@ e_exit:
     JML $809E7F
 e_drain_skip:
     JML $809ECE
+
+; ================= SPRITE X-CULL RELAX (widescreen strips) =================
+; Replaces the OAM-build engine's X-cull range test (4 sites). Called via JSL with
+; A = sprite screen-X (16-bit), in the engine's M=16 state. Returns:
+;   carry SET   -> cull this sprite (truly off-screen past the strips)
+;   carry CLEAR -> draw; A=0 (Z=1) on-screen no high bit, A=1 (Z=0) strip -> set high
+; Each call site keeps its own original "set X-high" bytes (ORA vs EOR), run only when
+; A!=0, so a strip sprite (X>=256 or X<0) gets its X-high bit and bsnes-hd renders it
+; in the strip. Display-only: the helper touches no memory; sites touch only OAM.
+ws_sprite_cull:
+    CMP #$0100
+    BCC wsc_nohigh              ; [0,255] on-screen, no high bit
+    CMP #${256 + SPRITE_MARGIN + 1:04X}
+    BCC wsc_high                ; right strip [256 .. 255+margin]
+    CMP #${(0x10000 - SPRITE_MARGIN) & 0xFFFF:04X}
+    BCC wsc_cull                ; truly off-screen -> cull
+wsc_high:                       ; right strip, or left strip [-margin..-1]
+    CLC
+    LDA #$0001
+    RTL
+wsc_nohigh:
+    CLC
+    LDA #$0000
+    RTL
+wsc_cull:
+    SEC
+    RTL
 """
 
 
@@ -496,6 +528,36 @@ def main() -> int:
     patch(DRAIN_HOOK_FILE, "24 26 70 4F", labels["enqueue_entry"])
     rom[ROUTINE_FILE:ROUTINE_FILE + len(code)] = code
 
+    # --- sprite X-cull relax: route the 4 OAM-build cull sites through ws_sprite_cull ---
+    # Original 22 bytes: CMP #$0100 / BCC draw / CMP #$FFF1 / BCC cull / set-X-high(12).
+    # New 22 bytes, keeping each site's own set-high (sites 1-3 ORA, site 4 EOR):
+    #   JSL ws_sprite_cull ; BCS cull ; BEQ draw(+$0E) ; <original set-high 12B> ; NOP NOP
+    helper = labels["ws_sprite_cull"]
+    # (file_off, snes_addr, cull_target) for the four sites
+    sprite_sites = [
+        (0x3A74, 0xBA74, 0xBAAB),
+        (0x3AE4, 0xBAE4, 0xBB1E),
+        (0x3B5A, 0xBB5A, 0xBB94),
+        (0x3BD7, 0xBBD7, 0xBC11),
+    ]
+    for foff, snes, cull in sprite_sites:
+        orig = bytes(rom[foff:foff + 22])
+        set_high = orig[10:22]   # LDY $B747,X / LDA $B749,X / (ORA|EOR) $13BE,Y / STA $13BE,Y
+        ok = (orig[0:5] == bytes.fromhex("C900019011")          # CMP #$0100 / BCC draw
+              and orig[5:9] == bytes.fromhex("C9F1FF90")        # CMP #$FFF1 / BCC ... (operand varies)
+              and set_high[0:6] == bytes.fromhex("BC47B7BD49B7")
+              and set_high[6] in (0x19, 0x59)                   # ORA or EOR $13BE,Y
+              and set_high[7:12] == bytes.fromhex("BE1399BE13"))
+        if not ok:
+            raise SystemExit(f"unexpected sprite-cull bytes at 0x{foff:05X}: {orig.hex(' ')}")
+        rel = cull - (snes + 6)        # BCS operand at snes+4, measured from snes+6
+        if not 0 <= rel <= 0x7F:
+            raise SystemExit(f"sprite-cull BCS out of range at 0x{foff:05X}: {rel}")
+        new = bytes([0x22, helper & 0xFF, (helper >> 8) & 0xFF, (helper >> 16) & 0xFF,
+                     0xB0, rel, 0xF0, 0x0E]) + set_high + b"\xEA\xEA"
+        assert len(new) == 22
+        rom[foff:foff + 22] = new
+
     checksum = sum(rom) & 0xFFFF
     co = build.CHECKSUM_OFFSET
     rom[co:co + 2] = (checksum ^ 0xFFFF).to_bytes(2, "little")
@@ -516,6 +578,7 @@ def main() -> int:
     print(f"gather_entry  : ${labels['gather_entry']:06X}")
     print(f"g_slot        : ${labels['g_slot']:06X}")
     print(f"enqueue_entry : ${labels['enqueue_entry']:06X}")
+    print(f"ws_sprite_cull: ${labels['ws_sprite_cull']:06X}  (4 cull sites, margin {SPRITE_MARGIN}px)")
     print(f"test ROM      : {out_rom}")
     print(f"widescreen IPS: {out_ips} ({len(ips)} bytes)")
     print(f"SHA-256       : {build.digest(bytes(rom), 'sha256')}")

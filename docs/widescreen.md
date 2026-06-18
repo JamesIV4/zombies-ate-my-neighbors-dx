@@ -121,6 +121,22 @@ For strip column offset `off` (`-10..-1` and `+32..+41`) and world-col
 3. **enqueue (vblank):** queue entry `src=colbuf, bank=$7F, vram=VRAMDEST,
    vmain=$0081 (vertical +32), size=$0040`; then `VRAMDEST := $FFFF` (consumed).
 
+### Sprites (OAM X-cull relax)
+
+The OAM-build engine (`$80:BA6F-$BDC9`) only writes a sprite to the OAM shadow if its
+screen-X is in `[-15, 255]`; anything further into a strip is culled. Four identical
+cull sites (`$80:BA74/$BAE4/$BB5A/$BBD7`) each do `CMP #$0100 / BCC draw / CMP #$FFF1 /
+BCC cull / <set X-high bit>`. Each is replaced with `JSL ws_sprite_cull` (a helper in
+the same free ROM) that widens the visible range to `[-SPRITE_MARGIN, 255+SPRITE_MARGIN]`
+(=±80 px, matching the BG strips) and returns draw/cull + whether the X-high bit is
+needed; the site keeps its **own** original set-high bytes (sites 1-3 `ORA`, site 4
+`EOR`) so a strip sprite gets its X-high bit and bsnes-hd renders it in the strip.
+
+**Display-only and no aggro change:** this only changes which *already-active* actors
+get an OAM entry — an enemy off the right edge already has its AI running; we just let
+it be *drawn* in the strip. Mesen-verified: stock culls both strip X-ranges to 0; the
+patch draws them (`right=3, left=5` in a sample), with identical actor positions.
+
 ---
 
 ## 5. Reverse-engineered facts (Mesen-verified live where noted)
@@ -229,13 +245,12 @@ anywhere). Walk around and watch the leading edges fill with correct terrain.
 - [x] **Strip width** — `NSTRIP`=10 columns/side (≈80 px). Cost no longer scales with
       width (incremental gather), so bump freely for ultrawide.
 - [x] **Slowdown** — fixed via incremental gather + faster inner loop (§4, §6 bug 6).
-- [ ] **Visual confirmation in bsnes-hd** (user) — (a) strips fill to the screen edge,
-      (b) no slowdown, (c) watch the strip **corners during vertical scroll** for any
-      brief stale band (trickle lag); if present, raise `TRICKLE` or add exact vertical
-      streaming.
-- [ ] **Tuning** — horizontal/vertical alignment; behavior at level edges.
-- [ ] **Sprites** — relax the OAM X-cull so active sprites draw in the strips
-      (bsnes-hd already renders them; the game culls at the 256 edge). Display-only.
+- [x] **BG confirmed in bsnes-hd** (user, 2026-06-18) — strips fill to the edge, smooth.
+- [x] **Sprites** — OAM X-cull relaxed to ±80 px (§4 *Sprites*); Mesen-confirmed the
+      strip X-ranges go from 0 (stock) to non-zero (patched). Display-only.
+- [ ] **Visual confirmation of sprites in bsnes-hd** (user) — active actors draw in both
+      strips; no spurious sprites; corners OK during vertical scroll.
+- [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment; level edges.
 - [ ] **BG2** — the 32×32 second layer may need its own pass if it shows strip garbage.
 - [ ] **Hosting** — decide how to run bsnes-hd alongside the analog runtime (see §3).
 - [ ] **Launcher integration** — optional toggle + `build_release` staging + auto
