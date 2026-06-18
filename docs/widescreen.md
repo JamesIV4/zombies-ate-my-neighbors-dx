@@ -192,6 +192,15 @@ The first builds crashed/hung. Diagnosed entirely with **Mesen headless tracing*
    enqueue now **consumes** each column (`VRAMDEST:=$FFFF`) so only freshly-gathered
    columns re-upload. (See §4.) Camera speed was Mesen-measured at ~2 px/frame, which
    sets the leading/trickle cadence.
+7. **Level 2 completely broken (per-level row stride).** The fast inner loop from bug 6
+   stepped the map pointer by a hardcoded `+$160` — that's only level 1's row stride
+   (map width). Map width is **per level** (`$B2`), so on a different-width level the
+   step read the wrong rows → garbage strips. → Step by the **live `$B2`** instead
+   (`SRCEND = start + 32*$B2`); the row start still comes from the game's `$7E:4328`
+   table (handles any base), so the walk matches the game's own streaming for any level.
+   Also added a stride-change check (`$B2` differs from last frame ⇒ full refill) so a
+   level transition repaints cleanly. *Lesson: `mesen_ws_verify.lua` only runs on level
+   1, where `$B2`=`$160`, so it can't catch a hardcoded-stride bug — verify on level 2+.*
 
 Result: the hook runs **identically to stock DX** and is data-correct across all 20
 columns (`mesen_ws_verify.lua` `failures=0`), `$CE` returning to zero, no hang. Live

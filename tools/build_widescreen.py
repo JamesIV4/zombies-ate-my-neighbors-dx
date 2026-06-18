@@ -85,6 +85,7 @@ SB = 0xF500               # scratch base
 CAMCOL, CAMROW, RINGCOL, RINGROW, THRESH = (SB + 2 * i for i in range(5))   # 00..08
 SIDX, MC, MCX2, CSB, WRAPAT, SRCEND, WCELL = (SB + 0x0A + 2 * i for i in range(7))  # 0A..16
 DCOL, DROW = SB + 0x18, SB + 0x1A
+PREVSTRIDE = SB + 0x1C      # last frame's map width ($B2); change => level/map switch
 FULLF = SB + 0x1E
 LEADLO, LEADHI, LEADN = SB + 0x20, SB + 0x22, SB + 0x24
 PREVCOL, PREVROW, REFCUR, INITDONE, LASTTICK = (SB + 0x26 + 2 * i for i in range(5))  # 26..2E
@@ -163,6 +164,9 @@ g_refok:
     SBC ${PREVROW:04X}
     STA ${DROW:04X}
     ; --- decide full vs incremental ---
+    LDA $0000B2                 ; map width changed => new level/map => full refill
+    CMP ${PREVSTRIDE:04X}
+    BNE g_full
     LDA ${INITDONE:04X}
     CMP #$0001
     BNE g_full
@@ -275,6 +279,8 @@ g_noadv:
     STA ${PREVCOL:04X}
     LDA ${CAMROW:04X}
     STA ${PREVROW:04X}
+    LDA $0000B2
+    STA ${PREVSTRIDE:04X}
 g_exit:
     REP #$30
     PLY
@@ -336,10 +342,16 @@ g_s_ok:
     LDA $7E4328,X
     CLC
     ADC ${MCX2:04X}
-    TAX
-    TXA                         ; SRCEND = X + 32*$160
+    STA ${SRCEND:04X}           ; (temp) start = rowbase[CAMROW] + MC*2
+    TAX                         ; X = map source pointer
+    LDA $0000B2                 ; SRCEND = start + 32*stride (live map width $B2)
+    ASL
+    ASL
+    ASL
+    ASL
+    ASL
     CLC
-    ADC #$2C00
+    ADC ${SRCEND:04X}
     STA ${SRCEND:04X}
 g_row:
     LDA $0000,X                 ; map cell (DB=$7F -> $7F:X)
@@ -360,9 +372,9 @@ g_np:
     SBC #$0040
     TAY
 g_nw:
-    TXA                         ; advance map source by one row
+    TXA                         ; advance map source by one row (live stride $B2)
     CLC
-    ADC #$0160
+    ADC $0000B2
     TAX
     CPX ${SRCEND:04X}
     BNE g_row
