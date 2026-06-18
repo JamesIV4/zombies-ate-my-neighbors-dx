@@ -86,20 +86,23 @@ loop runs with **`DB=$7F`** (map/colbuf/scratch become cheap absolute accesses) 
 the map with a running **`+$160`** row pointer instead of a per-row table lookup (the
 row-base table is exactly `row*$160`).
 
-### Two hooks
+### Hooks
 
 | Hook | Site | Context | Job |
 |---|---|---|---|
 | **GATHER** | `$80:A93F` (scroll dispatcher entry, via trampoline) | active display, **gated once/frame** | Re-run the original dispatcher, then gather the selected (leading + trickle) columns into colbufs and record each column's VRAM destination. No queue. |
 | **ENQUEUE** | `$80:9E7B` (VRAM-queue drain entry, via trampoline) | vblank, cheap | Append the just-gathered colbufs to the game's VRAM-DMA queue, **mark each consumed (`$FFFF`)** so it isn't re-uploaded, set the dirty flag, then continue the original drain (which DMAs them and zeroes `$CE`). |
+| **CAMERA** | `$80:A68B` / `$80:A70A` (horizontal scroll left/right) | scroll edge checks | Stop horizontal camera scroll one strip-width inside the stock map bounds, so bsnes-hd never exposes off-map BG1 columns at the level edges. |
 
-The split exists because the gather must stay out of vblank while VRAM uploads must
-happen **in** vblank. The dispatcher is NMI-driven and called many times per frame
-(1 px camera step each), so the gather is gated to run **once per frame** via tick `$20`.
+GATHER/ENQUEUE are split because the gather must stay out of vblank while VRAM uploads
+must happen **in** vblank. The dispatcher is NMI-driven and called many times per
+frame (1 px camera step each), so the gather is gated to run **once per frame** via
+tick `$20`. CAMERA is separate and leaves the stock scroll code in charge until the
+widescreen strip would cross a horizontal level edge.
 
 ### Routine + memory layout
 
-Routine lives in free ROM at **`$8F:CC00`** (1792 free bytes; ~748 used). Scratch lives
+Routine lives in free ROM at **`$8F:CC00`** (1792 free bytes; ~1092 used). Scratch lives
 in free high WRAM (the level map ends ~`$7F:8F00`, so `$7F:F000+` is free; the DX mailbox
 at `$7F:FFF0` is already proven free):
 
@@ -120,6 +123,23 @@ For strip column offset `off` (`-10..-1` and `+32..+41`) and world-col
 2. **dest:** `VRAMDEST = $1B7E + $80:9D77[(($1B76 + off) & 63)*2]`.
 3. **enqueue (vblank):** queue entry `src=colbuf, bank=$7F, vram=VRAMDEST,
    vmain=$0081 (vertical +32), size=$0040`; then `VRAMDEST := $FFFF` (consumed).
+
+### Camera edge clamp
+
+Stock ZAMN locks the horizontal camera at `0` on the left and `$00B8` (max camera X)
+on the right. With 10 widescreen strip columns visible on each side, bsnes-hd can see
+80 px beyond those stock edges, so the widened view would expose stale/off-map BG1
+tilemap columns even though the normal 4:3 window still looks fine.
+
+The widescreen patch hooks the stock left/right scroll checks and returns early when
+the camera reaches one strip width inside the level bounds:
+
+- left edge: `cameraX >= NSTRIP*8` (currently `$0050`)
+- right edge: `cameraX <= $00B8 - NSTRIP*8`
+
+On level 1, Mesen reports `$00B8=$0480`, so the right widescreen clamp is `$0430`.
+Vertical camera bounds are unchanged. This keeps the strips inside the real level map
+instead of painting black or trying to fabricate off-map data.
 
 ### Sprites (OAM X-cull relax)
 
@@ -233,8 +253,10 @@ Real bsnes-hd visual confirmation is still required.
 | VRAM-DMA queue | `src $1B84 / bank $1BB4 / vram $1BE4 / vmain $1C14 / size $1C44`, len `$CE`, dirty flag `$26` |
 | Queue drain | `$80:9E7B` (`BIT $26; BVS $9ECE; LDA $CE; BEQ $9ECB; …`), zeroes `$CE` at `$9EBF` |
 | Scroll dispatcher | `$80:A93F` (`PHD; LDA #$0000; TCD …`), reached via pointer at `$80:A93C`; moves camera 1 px/call |
+| Horizontal camera scroll | left check `$80:A68B`, right check `$80:A70A`; stock clamps at `0` / `$00B8`, widescreen clamps at `$0050` / `$00B8-$0050` |
 | Task scheduler | cooperative; tasks `$1180,X`, saved SPs `$11B0,X`; main loop `$8340-$8398`; `WAI` at `$8371`; **per-frame tick `$20/$22`** incremented at `$8372`; `JSL $80BD1F` at `$837C` |
 | Camera (pixels) | `$1B6A` / `$1B6C` |
+| Camera max X | `$00B8` (`$0480` on level 1) |
 | Guards | `$0E` game-state (`2` = in a level); `$0D25` player-active (`0` during level load) |
 
 ---
@@ -281,10 +303,16 @@ The first builds crashed/hung. Diagnosed entirely with **Mesen headless tracing*
    Also added a stride-change check (`$B2` differs from last frame ⇒ full refill) so a
    level transition repaints cleanly. *Lesson: `mesen_ws_verify.lua` only runs on level
    1, where `$B2`=`$160`, so it can't catch a hardcoded-stride bug — verify on level 2+.*
+8. **Horizontal level edges exposed off-map/stale BG1 data.** The strip gather correctly
+   skips columns outside the level map, but bsnes-hd can still show old tilemap contents
+   if the stock camera reaches `0` or `$00B8` with an 80 px wider view. -> Hooked the
+   stock left/right scroll edge checks (`$80:A68B`/`$80:A70A`) so the camera clamps one
+   strip width earlier. On level 1 this changes the horizontal bounds from `$0000..$0480`
+   to `$0050..$0430`.
 
-Result: the hook runs **identically to stock DX** and is data-correct across all 20
-columns (`mesen_ws_verify.lua` `failures=0`), `$CE` returning to zero, no hang. Live
-smoothness is the remaining user check.
+Result: the BG hook is data-correct across all 20 columns (`mesen_ws_verify.lua`
+`failures=0`), `$CE` returns to zero, and horizontal camera edges stay inside the real
+level map.
 
 ---
 
@@ -298,6 +326,8 @@ smoothness is the remaining user check.
 | `tools/diagnostics/mesen_wram_probe.lua` | Dumps live WRAM (found map extent + free scratch). |
 | `tools/diagnostics/mesen_ws_trace.lua` | Stability/scroll trace (catches hangs, logs camera). |
 | `tools/diagnostics/mesen_ws_verify.lua` | BG data-correctness check (colbuf ↔ map ↔ VRAM). |
+| `tools/diagnostics/mesen_camera_bounds_probe.lua` | Natural-route camera trace; confirms left clamp reaches `$0050` instead of stock `$0000`. |
+| `tools/diagnostics/mesen_camera_clamp_verify.lua` | Controlled right-edge proof; forces camera attempts at `$042F/$0430` and confirms `$0430` blocks when `$00B8=$0480`. |
 | `tools/diagnostics/mesen_sprite_probe.lua` | Counts sprites in the strip X-ranges (stock 0 vs patched >0). |
 | `tools/diagnostics/mesen_oam_writers.lua` | Write-callback on the OAM shadow → every OAM-writer PC (found the one engine). |
 | `tools/diagnostics/mesen_cull_trace.lua` | Exec-callback at an engine point → per-object-type screen-region histogram (found type `$05` never in strips). |
@@ -367,9 +397,14 @@ anywhere). Walk around and watch the leading edges fill with correct terrain.
       each task wake, and widened the `$81:823C` victim scanner X gate to `$00F0`.
       User savestates now emit type `$0C` item/map-object OAM from frame 1 and
       type `$01` neighbor OAM in the left strip by frame 10 at `screenX=-63`.
-- [ ] **bsnes-hd visual confirmation for items/neighbors** - user should verify the
-      saved left-walk scene and a fresh approach path in standalone bsnes-hd.
-- [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment; level edges.
+- [x] **bsnes-hd visual confirmation for items/neighbors** - user-confirmed both item
+      and neighbor strip rendering in standalone bsnes-hd.
+- [x] **Horizontal level-edge clamp** - stock camera bounds now clamp one strip width
+      earlier (`$0050` left, `$00B8-$0050` right) so the widened BG1 view stays inside
+      the level map.
+- [ ] **bsnes-hd visual confirmation for level edges** - approach the left/right level
+      edges and confirm the camera clamp looks clean in standalone bsnes-hd.
+- [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment.
 - [ ] **BG2** — the 32×32 second layer may need its own pass if it shows strip garbage.
 - [ ] **Hosting** — decide how to run bsnes-hd alongside the analog runtime (see §3).
 - [ ] **Launcher integration** — optional toggle + `build_release` staging + auto

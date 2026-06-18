@@ -32,6 +32,9 @@ Two hooks:
               The render-list build also appends active type-$05 objects that are
               already in object slots but missing from $137E just outside the
               normal horizontal window.
+  * CAMERA  - the stock horizontal edge lock is guarded so it triggers one strip
+              width earlier on the left/right edges. This keeps bsnes-hd's extra
+              columns inside the level map instead of exposing stale off-map VRAM.
 
 Mesen-verified facts:
   * dispatcher entry $80:A93F (PHD; LDA #$0000; TCD ...), reached via ptr at $A93C
@@ -40,6 +43,7 @@ Mesen-verified facts:
   * gameplay guards  $0E == 2 AND $0D25 != 0 (0 during level load)
   * camera           $1B6A/$1B6C ; BG1 base $1B7E (=$7800) ; thresh $DC (=$70)
   * BG1 ring origin  $1B76/$1B7A ; tilemap col/row for the camera's top-left tile
+  * horizontal scroll $80:A68B (left) / $80:A70A (right), max camera X $00B8
   * VRAM col table   $80:9D77[(($1B76+offset)&63)*2] ; map cell $7F:(rowbase+col*2)
   * row-base table   $7E:4328[row*2] == row*$160 (arithmetic; rowstride $B2=$0160)
   * priority         (cell&$1FF)<$DC -> OR $2000
@@ -84,6 +88,7 @@ FULLJMP = 4                 # >= this many tiles moved in one frame -> full refi
 # sprite, so active actors in the widescreen strips are rendered (display-only; the
 # game still culls truly off-screen sprites). Matches the BG strip width.
 SPRITE_MARGIN = NSTRIP * 8
+CAMERA_EDGE_MARGIN = NSTRIP * 8
 OBJECT_ACTIVATION_MARGIN = SPRITE_MARGIN
 VICTIM_ACTIVATION_MARGIN = SPRITE_MARGIN
 TYPE05_SLOT_FIRST = 0x185E
@@ -677,6 +682,31 @@ wsc_nohigh:
 wsc_cull:
     SEC
     RTL
+
+; ================= CAMERA EDGE CLAMP (widescreen strips) =================
+; Let the stock horizontal camera edge lock happen one strip-width earlier so
+; bsnes-hd's extra columns still land inside the level map at the left/right edges.
+; If scrolling is still allowed, jump back into the original per-pixel scroll
+; routine immediately after its stock edge test; the original VRAM streaming stays
+; unchanged. Vertical camera bounds remain stock.
+ws_scroll_left_guard:
+    LDA $001B6A
+    CMP #${CAMERA_EDGE_MARGIN + 1:04X}
+    BCS wsl_continue           ; allow DEC down to exactly CAMERA_EDGE_MARGIN
+    RTL
+wsl_continue:
+    JML $80A690
+
+ws_scroll_right_guard:
+    LDA $001B6A
+    CLC
+    ADC #${CAMERA_EDGE_MARGIN:04X}
+    CMP $0000B8
+    BCC wsr_continue           ; allow INC up to maxX-CAMERA_EDGE_MARGIN
+    RTL
+wsr_continue:
+    LDA $001B6A
+    JML $80A712
 """
 
 
@@ -699,6 +729,8 @@ def main() -> int:
 
     patch(DISP_HOOK_FILE, "0B A9 00 00", labels["gather_entry"])
     patch(DRAIN_HOOK_FILE, "24 26 70 4F", labels["enqueue_entry"])
+    patch(0x268B, "AD 6A 1B F0", labels["ws_scroll_left_guard"])   # $80:A68B
+    patch(0x270A, "AD 6A 1B C5", labels["ws_scroll_right_guard"])  # $80:A70A
     rom[ROUTINE_FILE:ROUTINE_FILE + len(code)] = code
 
     # Replace JSR $BCE2 / JSR $BC23 in the sprite engine with one long helper that
@@ -802,6 +834,7 @@ def main() -> int:
     print(f"g_slot        : ${labels['g_slot']:06X}")
     print(f"enqueue_entry : ${labels['enqueue_entry']:06X}")
     print(f"ws_sprite_cull: ${labels['ws_sprite_cull']:06X}  (4 cull sites, margin {SPRITE_MARGIN}px)")
+    print(f"camera clamp  : $80:A68B/$A70A  margin {CAMERA_EDGE_MARGIN}px")
     print(f"object X gate : $80:C948  threshold ${object_threshold:04X} (stock $0090)")
     print("object scanner: $80:C91C  every wake (stock every 4 ticks)")
     print(f"victim X gate : $81:823C  threshold ${victim_threshold:04X} (stock $00A0)")
