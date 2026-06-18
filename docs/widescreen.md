@@ -137,6 +137,47 @@ get an OAM entry — an enemy off the right edge already has its AI running; we 
 it be *drawn* in the strip. Mesen-verified: stock culls both strip X-ranges to 0; the
 patch draws them (`right=3, left=5` in a sample), with identical actor positions.
 
+That OAM-X-cull fixed **enemies/player/projectiles**. **Items & survivors are a separate,
+deeper case** (the cull above does not affect them) — investigation below.
+
+### Sprites part 2: items & survivors (object type $05) — proximity-gated
+
+Reported after the OAM-X-cull shipped: enemies appear in the strips but **items and
+survivors still pop in at the 256 px edge**. Traced empirically (Mesen write/exec
+callbacks; tools below). Findings:
+
+- **One OAM engine.** A write-callback on the whole OAM shadow (`$7E:13BE-$15DD`) shows
+  *every* sprite byte is written by the bank-`$80` engine `$BA5E-$BDCC` — there is no
+  second renderer. Entry is `$80:BD1F` (per-frame, called from the main loop), reached
+  by fall-through, not `JSR`/`JSL`.
+- **The pipeline:** objects live in a `$1B5E` linked list → builder `$80:BCEA` walks it,
+  culls each at `screenX/Y ∈ [-128, 384)` (`SBC $1B6A/$1B6C` / `CMP #$FF80` / `CMP #$0180`)
+  and flattens survivors into the render array `$137E` → engine `$BD1F` iterates `$137E`,
+  per-object setup `$80:BD79` computes `screenX = objX - $1B6A`, then the draw loops
+  (the 4 patched per-tile culls) emit OAM.
+- **The actual gate (empirical).** Hooking the setup `$BD79` and the builder `$BCEA` and
+  bucketing by object type (`$0E,X`): types `$00/$01/$03` (player/enemies/projectiles)
+  reach both in the strips; **type `$05` reaches them only on-screen (0 in either strip,
+  ~1000+ on-screen).** So type `$05` is dropped from the `$1B5E` list *before* the builder
+  — i.e. gated by proximity to the ~256 px window, upstream of every cull we can see.
+- It does **not** use the normal render-list insert/remove (`$80:BE28`/`$80:BE51`); a
+  trace of those caught only types `$00/$01/$03`. The exact gate is still unpinned.
+- **Do NOT touch** the bank-`$81` type-3/4 routine + `$80:B22A`/`$80:B093`: those compute
+  `|delta|` vs 256 *and* 17 px and call overlap tests (`$80:ADC8`) — that's collision /
+  pickup / interaction (gameplay), not rendering.
+- **Disassembler caveat:** `re65816.py` doesn't track the `REP`/`SEP` M/X widths, so dense
+  engine code mis-aligns; `$80:9D77` is the **VRAM-column data table** (used by the BG
+  hook), *not* a dispatcher — a mis-decode sent me down one dead end. Verify engine
+  branch targets against the raw bytes.
+
+**Likely display-only but unproven:** ZAMN simulates neighbors off-screen (you hear them
+die), so type-`$05` objects are probably still simulated and merely not *drawn* when far —
+relaxing the gate ~80 px should be display-only. But because the gate is in the
+object/render-management layer (the area the no-early-activation rule guards), it must be
+verified to not change object spawn/activation before shipping. **Next step (user chose
+"relax it now, I'll test"):** find the gate via a write-trace on a type-`$05` object's
+render-membership field, relax it ~`SPRITE_MARGIN`, and confirm object state is unchanged.
+
 ---
 
 ## 5. Reverse-engineered facts (Mesen-verified live where noted)
@@ -217,7 +258,18 @@ smoothness is the remaining user check.
 | `tools/build_widescreen.py` | Assembles the hook, applies both trampolines + the routine to the DX ROM, fixes checksum, emits `mod/widescreen.ips` and a ready test ROM. |
 | `tools/diagnostics/mesen_wram_probe.lua` | Dumps live WRAM (found map extent + free scratch). |
 | `tools/diagnostics/mesen_ws_trace.lua` | Stability/scroll trace (catches hangs, logs camera). |
-| `tools/diagnostics/mesen_ws_verify.lua` | Data-correctness check (colbuf ↔ map ↔ VRAM). |
+| `tools/diagnostics/mesen_ws_verify.lua` | BG data-correctness check (colbuf ↔ map ↔ VRAM). |
+| `tools/diagnostics/mesen_sprite_probe.lua` | Counts sprites in the strip X-ranges (stock 0 vs patched >0). |
+| `tools/diagnostics/mesen_oam_writers.lua` | Write-callback on the OAM shadow → every OAM-writer PC (found the one engine). |
+| `tools/diagnostics/mesen_cull_trace.lua` | Exec-callback at an engine point → per-object-type screen-region histogram (found type `$05` never in strips). |
+| `tools/diagnostics/mesen_reglist_trace.lua` | Exec-callback at render-list insert/remove → callers + screenX thresholds. |
+
+**MesenCE Lua API (for the above):** memory/exec callbacks via
+`emu.addMemoryCallback(fn, emu.callbackType.{read,write,exec}, start, end, emu.cpuType.snes, emu.memType.X)`
+— for the OAM shadow use `memType=snesWorkRam` with WRAM offsets; for exec use
+`memType=snesMemory` with the 24-bit code address (e.g. `0x80BD79`). Read registers in a
+callback with `emu.getCpuState(emu.cpuType.snes)` (`.k/.pc/.x/.y/.sp/.dbr`); `emu.getState()`
+is a flat table with dotted keys (`"cpu.pc"`), so `.cpu` is nil — use `getCpuState`.
 
 **Mesen headless** (the key debugging unlock) — this build is **MesenCE**, a GUI-
 subsystem app. Two gotchas that look like an instant no-op if you get them wrong:
@@ -255,10 +307,14 @@ anywhere). Walk around and watch the leading edges fill with correct terrain.
       width (incremental gather), so bump freely for ultrawide.
 - [x] **Slowdown** — fixed via incremental gather + faster inner loop (§4, §6 bug 6).
 - [x] **BG confirmed in bsnes-hd** (user, 2026-06-18) — strips fill to the edge, smooth.
-- [x] **Sprites** — OAM X-cull relaxed to ±80 px (§4 *Sprites*); Mesen-confirmed the
-      strip X-ranges go from 0 (stock) to non-zero (patched). Display-only.
-- [ ] **Visual confirmation of sprites in bsnes-hd** (user) — active actors draw in both
-      strips; no spurious sprites; corners OK during vertical scroll.
+- [x] **Sprites (enemies/player/projectiles)** — OAM X-cull relaxed to ±80 px
+      (§4 *Sprites*); Mesen-confirmed the strip X-ranges go from 0 (stock) to non-zero
+      (patched). Display-only. User-confirmed in bsnes-hd.
+- [ ] **Sprites (items & survivors, type `$05`)** — IN PROGRESS. These are proximity-gated
+      upstream of the render pipeline (§4 *Sprites part 2*), so the OAM-X-cull doesn't
+      reach them. User chose "relax it now, I'll test." Plan: write-trace a type-`$05`
+      object's render-membership field to find the gate, relax it ~`SPRITE_MARGIN`, and
+      verify object spawn/activation state is unchanged before shipping.
 - [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment; level edges.
 - [ ] **BG2** — the 32×32 second layer may need its own pass if it shows strip garbage.
 - [ ] **Hosting** — decide how to run bsnes-hd alongside the analog runtime (see §3).
