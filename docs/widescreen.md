@@ -31,10 +31,10 @@ background and sprites. So widescreen has two parts:
    VRAM** (garbage on the leading edge). A small **ROM hack** must keep those strip
    columns filled from the level map.
 
-This is **display-only**: bsnes-hd renders more of the world the game already
-simulates; it does not change the game's camera, AI, spawning, or aggro. Our ROM
-hook only writes to the BG tilemap VRAM queue + a scratch buffer — never actor/AI
-state — so the no-gameplay-change requirement holds by construction.
+The BG streaming and OAM X-cull pieces are **display-only**: bsnes-hd renders more
+of the world the game already simulates. The item/survivor work is the exception:
+it intentionally widens the stock map-object activation/deactivation X gate so
+map-object spawners can wake while still inside the widescreen side strips.
 
 ### POC result (user, in standalone bsnes-hd)
 Loading **unpatched** ZAMN in bsnes-hd with widescreen + "render sprites anywhere":
@@ -140,7 +140,32 @@ patch draws them (`right=3, left=5` in a sample), with identical actor positions
 That OAM-X-cull fixed **enemies/player/projectiles**. **Items & survivors are a separate,
 deeper case** (the cull above does not affect them) — investigation below.
 
-### Sprites part 2: items & survivors (object type $05) — proximity-gated
+### Sprites part 2: items, survivors, and map-object spawners
+
+**Update from the user savestate (2026-06-18):** the "type `$05` items/survivors"
+theory was too narrow. In the saved left-walk scene, the edge objects are map-object
+types such as `$0C`, `$01`, `$00`, and `$21`; type `$05` is centered on the player.
+The relevant problem is upstream activation, not the final OAM cull: inactive
+map-object templates already hold the correct sprite/type/X/Y data, but stock ZAMN
+does not activate them until the scanner sees them near the 4:3 window.
+
+Implemented fix:
+- `$80:C948` map-object X proximity gate widened from `CMP #$0090` to
+  `CMP #$00E0` (`$0090 + SPRITE_MARGIN`). This changes the horizontal activation
+  and deactivation range from about `[-15,271]` to about `[-95,351]`, covering the
+  80 px widescreen strips while leaving the vertical gate unchanged.
+- `$80:C91C` scanner cadence changed from `($20 & 3) == 0` to every task wake. The
+  task still yields normally, but mid-cycle saves no longer wait several ticks before
+  the widened pass can pick up a strip object.
+- User savestate verification now shows type `$0C` active/emitting left-strip OAM
+  from frame 1 at `objScreen=(-45,40)` / `tileX=-51`; before this patch it first
+  emitted strip tiles around frame 19 at `objScreen=(-9,40)`.
+
+The older type-`$05` render-list relax remains in the current build as a synthetic
+display-only bypass for active unlisted slots, but the real saved-scene fix is the
+map-object activation gate above.
+
+#### Earlier type-`$05` investigation (kept for reference)
 
 Reported after the OAM-X-cull shipped: enemies appear in the strips but **items and
 survivors still pop in at the 256 px edge**. Traced empirically (Mesen write/exec
@@ -161,7 +186,13 @@ callbacks; tools below). Findings:
   ~1000+ on-screen).** So type `$05` is dropped from the `$1B5E` list *before* the builder
   — i.e. gated by proximity to the ~256 px window, upstream of every cull we can see.
 - It does **not** use the normal render-list insert/remove (`$80:BE28`/`$80:BE51`); a
-  trace of those caught only types `$00/$01/$03`. The exact gate is still unpinned.
+  trace of those caught only types `$00/$01/$03`.
+- **Earlier implemented relax:** the widescreen build now replaces the stock
+  `JSR $BCE2 / JSR $BC23` pair at `$80:BD2A` with `ws_build_render_list`. It rebuilds
+  `$137E` like stock, scans the 32 object slots `$185E-$1ACA`, and appends active
+  type-`$05` slots that are inside the widened horizontal range but missing from
+  `$137E`. It then performs the stock OAM-shadow clear. This leaves `$1B5E` and
+  object state untouched; only the current frame's flattened render array can grow.
 - **Do NOT touch** the bank-`$81` type-3/4 routine + `$80:B22A`/`$80:B093`: those compute
   `|delta|` vs 256 *and* 17 px and call overlap tests (`$80:ADC8`) — that's collision /
   pickup / interaction (gameplay), not rendering.
@@ -170,13 +201,13 @@ callbacks; tools below). Findings:
   hook), *not* a dispatcher — a mis-decode sent me down one dead end. Verify engine
   branch targets against the raw bytes.
 
-**Likely display-only but unproven:** ZAMN simulates neighbors off-screen (you hear them
-die), so type-`$05` objects are probably still simulated and merely not *drawn* when far —
-relaxing the gate ~80 px should be display-only. But because the gate is in the
-object/render-management layer (the area the no-early-activation rule guards), it must be
-verified to not change object spawn/activation before shipping. **Next step (user chose
-"relax it now, I'll test"):** find the gate via a write-trace on a type-`$05` object's
-render-membership field, relax it ~`SPRITE_MARGIN`, and confirm object state is unchanged.
+**Mesen verification:** the deterministic up/left route does not naturally put a type-`$05`
+object into a horizontal strip, so it cannot prove the user's exact bsnes-hd scene. A
+synthetic check (`mesen_type05_inject_verify.lua`) clones an already-active type-`$05`
+slot into the left strip without linking it through `$1B5E`; the patched renderer appends
+it to `$137E` and emits strip OAM (`saw_render=true`, `peak_left_strip_oam=5`). This
+proves the display-only bypass works when an active type-`$05` slot exists in a strip.
+Real bsnes-hd visual confirmation is still required.
 
 ---
 
@@ -263,6 +294,16 @@ smoothness is the remaining user check.
 | `tools/diagnostics/mesen_oam_writers.lua` | Write-callback on the OAM shadow → every OAM-writer PC (found the one engine). |
 | `tools/diagnostics/mesen_cull_trace.lua` | Exec-callback at an engine point → per-object-type screen-region histogram (found type `$05` never in strips). |
 | `tools/diagnostics/mesen_reglist_trace.lua` | Exec-callback at render-list insert/remove → callers + screenX thresholds. |
+| `tools/diagnostics/mesen_type05_probe.lua` | Counts active/rendered type-`$05` objects by screen region on the up/left route. |
+| `tools/diagnostics/mesen_type05_write_trace.lua` | Write-callback for type-`$05` slot initialization; found the load-time pair around `$80:D1A0/$80:D1B9`. |
+| `tools/diagnostics/mesen_type05_lifecycle.lua` | Per-frame type-`$05` slot/list/render membership log for route debugging. |
+| `tools/diagnostics/mesen_type05_inject_verify.lua` | Synthetic proof that an active unlisted type-`$05` strip slot is appended to `$137E` and drawn. |
+| `tools/diagnostics/mesen_route_trace.lua` | Logs camera/player movement for deterministic route debugging. |
+| `tools/diagnostics/mesen_savestate_object_sweep.lua` | Loads the user savestate and dumps active/rendered object slots while walking left. |
+| `tools/diagnostics/mesen_savestate_sprite_cull_trace.lua` | Buckets patched OAM-cull calls by object type for the user savestate. |
+| `tools/diagnostics/mesen_savestate_spawn_trace.lua` | Traces object-slot activation writes in the user savestate. |
+| `tools/diagnostics/mesen_savestate_target_slot_trace.lua` | Focused write trace for the specific late-spawning slots in the user savestate. |
+| `tools/diagnostics/mesen_savestate_a13e_callers.lua` | Identifies which bank-`$83` initializer callers create the saved-scene child objects. |
 
 **MesenCE Lua API (for the above):** memory/exec callbacks via
 `emu.addMemoryCallback(fn, emu.callbackType.{read,write,exec}, start, end, emu.cpuType.snes, emu.memType.X)`
@@ -310,11 +351,12 @@ anywhere). Walk around and watch the leading edges fill with correct terrain.
 - [x] **Sprites (enemies/player/projectiles)** — OAM X-cull relaxed to ±80 px
       (§4 *Sprites*); Mesen-confirmed the strip X-ranges go from 0 (stock) to non-zero
       (patched). Display-only. User-confirmed in bsnes-hd.
-- [ ] **Sprites (items & survivors, type `$05`)** — IN PROGRESS. These are proximity-gated
-      upstream of the render pipeline (§4 *Sprites part 2*), so the OAM-X-cull doesn't
-      reach them. User chose "relax it now, I'll test." Plan: write-trace a type-`$05`
-      object's render-membership field to find the gate, relax it ~`SPRITE_MARGIN`, and
-      verify object spawn/activation state is unchanged before shipping.
+- [x] **Sprites (items & survivors / map-object spawners)** - widened the `$80:C948`
+      map-object X activation/deactivation gate to `$00E0` and made the scanner run
+      each task wake; user savestate now emits type `$0C` left-strip OAM from frame 1
+      at `objScreen=(-45,40)` / `tileX=-51`.
+- [ ] **bsnes-hd visual confirmation for items/neighbors** - user should verify the
+      saved left-walk scene and a fresh approach path in standalone bsnes-hd.
 - [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment; level edges.
 - [ ] **BG2** — the 32×32 second layer may need its own pass if it shows strip garbage.
 - [ ] **Hosting** — decide how to run bsnes-hd alongside the analog runtime (see §3).

@@ -4,9 +4,10 @@
 Widescreen display comes from bsnes-hd ("WideScreen Mode = all scenes"); the game
 only streams BG tiles for the 256px window, so bsnes-hd's extra side columns show
 stale VRAM. This hook refills the columns just outside the 256px window from the
-level map so the widescreen strips show correct terrain. Display-only: it touches
-the BG tilemap VRAM queue and a scratch buffer, never actor/AI state, so enemy
-spawning and aggro are unchanged.
+level map so the widescreen strips show correct terrain. BG streaming and OAM X
+culling are display-only; the optional object-spawner relax intentionally widens
+the normal map-object activation/deactivation X gate so pickups/survivors can be
+created while still in the widescreen side strips.
 
 Two hooks:
   * GATHER  - at the per-frame scroll dispatcher $80:A93F (a proven-safe, register-
@@ -25,6 +26,12 @@ Two hooks:
               gathered colbufs to the game's own VRAM-DMA queue, marks each consumed
               ($FFFF) so it is not re-uploaded, then lets the drain DMA them and zero
               $CE so the game's "wait for queue empty" spin-waits still complete.
+  * SPRITES - the OAM X-culls are widened for already-rendered actors, and the
+              map-object activation/deactivation X gate is widened so object
+              spawners for pickups/survivors wake up while still in the side strips.
+              The render-list build also appends active type-$05 objects that are
+              already in object slots but missing from $137E just outside the
+              normal horizontal window.
 
 Mesen-verified facts:
   * dispatcher entry $80:A93F (PHD; LDA #$0000; TCD ...), reached via ptr at $A93C
@@ -77,6 +84,10 @@ FULLJMP = 4                 # >= this many tiles moved in one frame -> full refi
 # sprite, so active actors in the widescreen strips are rendered (display-only; the
 # game still culls truly off-screen sprites). Matches the BG strip width.
 SPRITE_MARGIN = NSTRIP * 8
+OBJECT_ACTIVATION_MARGIN = SPRITE_MARGIN
+TYPE05_SLOT_FIRST = 0x185E
+TYPE05_SLOT_END = 0x1ADE       # one past $1ACA + $14
+RENDER_ARRAY_MAX = 0x40        # $137E..$13BD, 32 object pointers
 
 # WRAM scratch, all in free high $7F. In the gather DB=$7F so these are 4-hex ("abs")
 # operands; in the enqueue DB=0 so the few it needs are written as 6-hex ("long").
@@ -490,6 +501,155 @@ e_exit:
 e_drain_skip:
     JML $809ECE
 
+; ================= TYPE-$05 RENDER-LIST RELAX (items/survivors) =================
+; Replaces the stock pair JSR $BCE2 / JSR $BC23 with one long helper. It rebuilds
+; $137E like stock, then appends active type-$05 slots that are horizontally within
+; the widescreen margin but were not linked through $1B5E. Finally it performs the
+; stock OAM-shadow clear from $BC23. This is display-only: $1B5E and actor state are
+; untouched; only the current frame's flattened render array can grow.
+ws_build_render_list:
+    LDY #$0000
+    LDX $1B5E
+    BEQ wbr_scan
+wbr_loop:
+    LDA $00,X
+    BPL wbr_next
+    ASL
+    BMI wbr_add
+    LDA $02,X
+    SEC
+    SBC $1B6A
+    CMP #$FF80
+    BCS wbr_ycheck
+    CMP #$0180
+    BCS wbr_next
+wbr_ycheck:
+    LDA $06,X
+    SEC
+    SBC $1B6C
+    CMP #$FF80
+    BCS wbr_add
+    CMP #$0180
+    BCS wbr_next
+wbr_add:
+    TXA
+    STA $137E,Y
+    INY
+    INY
+wbr_next:
+    LDA $12,X
+    TAX
+    BNE wbr_loop
+
+wbr_scan:
+    LDX #${TYPE05_SLOT_FIRST:04X}
+wbr_sloop:
+    LDA $0E,X
+    CMP #$0005
+    BNE wbr_snext
+    LDA $00,X
+    BPL wbr_snext                ; inactive/free: do not resurrect stale slots
+    ASL
+    BMI wbr_dupcheck             ; screen-anchored / forced-visible object
+    LDA $02,X
+    SEC
+    SBC $1B6A
+    CMP #${(0x10000 - SPRITE_MARGIN) & 0xFFFF:04X}
+    BCS wbr_sycheck              ; left strip [-margin..-1]
+    CMP #${0x0100 + SPRITE_MARGIN:04X}
+    BCS wbr_snext                ; far right
+wbr_sycheck:
+    LDA $06,X
+    SEC
+    SBC $1B6C
+    CMP #$FF80
+    BCS wbr_dupcheck
+    CMP #$0180
+    BCS wbr_snext
+wbr_dupcheck:
+    STX $38                      ; candidate slot
+    STY $3A                      ; current render-byte count
+    LDY #$0000
+wbr_dloop:
+    CPY $3A
+    BEQ wbr_append
+    LDA $137E,Y
+    CMP $38
+    BEQ wbr_restore
+    INY
+    INY
+    BRA wbr_dloop
+wbr_append:
+    LDY $3A
+    CPY #${RENDER_ARRAY_MAX:04X}
+    BCS wbr_restore
+    LDA $38
+    STA $137E,Y
+    INY
+    INY
+    STY $3A
+wbr_restore:
+    LDY $3A
+wbr_snext:
+    TXA
+    CLC
+    ADC #$0014
+    TAX
+    CPX #${TYPE05_SLOT_END:04X}
+    BCC wbr_sloop
+    STY $9C
+
+    ; Stock $80:BC23 OAM-shadow clear.
+    PHD
+    LDA #$13BE
+    TCD
+    LDX #$0008
+    SEP #$10
+    LDY #$E0
+    CLC
+wbr_clear_loop:
+    STY $01
+    STY $05
+    STY $09
+    STY $0D
+    STY $11
+    STY $15
+    STY $19
+    STY $1D
+    STY $21
+    STY $25
+    STY $29
+    STY $2D
+    STY $31
+    STY $35
+    STY $39
+    STY $3D
+    TDC
+    ADC #$0040
+    TCD
+    DEX
+    BNE wbr_clear_loop
+    LDA #$AAAA
+    STA $00
+    STA $02
+    STA $04
+    STA $06
+    STA $08
+    STA $0A
+    STA $0C
+    STA $0E
+    STA $10
+    STA $12
+    STA $14
+    STA $16
+    STA $18
+    STA $1A
+    STA $1C
+    STA $1E
+    REP #$30
+    PLD
+    RTL
+
 ; ================= SPRITE X-CULL RELAX (widescreen strips) =================
 ; Replaces the OAM-build engine's X-cull range test (4 sites). Called via JSL with
 ; A = sprite screen-X (16-bit), in the engine's M=16 state. Returns:
@@ -539,6 +699,43 @@ def main() -> int:
     patch(DISP_HOOK_FILE, "0B A9 00 00", labels["gather_entry"])
     patch(DRAIN_HOOK_FILE, "24 26 70 4F", labels["enqueue_entry"])
     rom[ROUTINE_FILE:ROUTINE_FILE + len(code)] = code
+
+    # Replace JSR $BCE2 / JSR $BC23 in the sprite engine with one long helper that
+    # rebuilds the normal render list, appends widened type-$05 entries, and clears OAM.
+    render_pair_off = 0x3D2A  # $80:BD2A
+    orig = bytes(rom[render_pair_off:render_pair_off + 6])
+    if orig != bytes.fromhex("20 E2 BC 20 23 BC"):
+        raise SystemExit(f"unexpected render-list call pair at 0x{render_pair_off:05X}: {orig.hex(' ')}")
+    helper = labels["ws_build_render_list"]
+    rom[render_pair_off:render_pair_off + 6] = bytes([
+        0x22, helper & 0xFF, (helper >> 8) & 0xFF, (helper >> 16) & 0xFF,
+        0xEA, 0xEA])
+
+    # Map-object activation uses an X/Y distance gate around the camera center:
+    # abs(objX - (camX+$80)) < $0090, abs(objY - (camY+$70)) < $0090.
+    # The stock X range wakes map-object spawners at about screen X [-15,271],
+    # so pickups/survivors can still pop at the 4:3 edge. Widen only the X gate
+    # by the strip margin; leave Y unchanged because this widescreen pass adds
+    # horizontal view only.
+    object_x_gate_off = 0x4948  # $80:C948  CMP #$0090 / BCS outside
+    orig = bytes(rom[object_x_gate_off:object_x_gate_off + 5])
+    if orig != bytes.fromhex("C9 90 00 B0 1C"):
+        raise SystemExit(f"unexpected object X-gate bytes at 0x{object_x_gate_off:05X}: {orig.hex(' ')}")
+    object_threshold = 0x0090 + OBJECT_ACTIVATION_MARGIN
+    if object_threshold > 0xFFFF:
+        raise SystemExit(f"object activation threshold too large: 0x{object_threshold:04X}")
+    rom[object_x_gate_off + 1:object_x_gate_off + 3] = object_threshold.to_bytes(2, "little")
+
+    # The map-object scanner is a cooperative task and stock only runs the proximity
+    # pass when ($20 & 3) == 0. With a wider leading edge, that cadence can still let
+    # old/mid-cycle states pop an object at the 4:3 edge before the next pass reaches
+    # it. Keep the task's yield points, but remove the tick modulo so each wake can
+    # perform the widened proximity pass.
+    object_scan_cadence_off = 0x4918  # $80:C918  LDA $20 / AND #$0003 / BNE $C90A
+    orig = bytes(rom[object_scan_cadence_off:object_scan_cadence_off + 8])
+    if orig != bytes.fromhex("AD 20 00 29 03 00 D0 EA"):
+        raise SystemExit(f"unexpected object scan cadence bytes at 0x{object_scan_cadence_off:05X}: {orig.hex(' ')}")
+    rom[object_scan_cadence_off + 4:object_scan_cadence_off + 6] = b"\x00\x00"
 
     # --- sprite X-cull relax: route the 4 OAM-build cull sites through ws_sprite_cull ---
     # Original 22 bytes: CMP #$0100 / BCC draw / CMP #$FFF1 / BCC cull / set-X-high(12).
@@ -591,6 +788,8 @@ def main() -> int:
     print(f"g_slot        : ${labels['g_slot']:06X}")
     print(f"enqueue_entry : ${labels['enqueue_entry']:06X}")
     print(f"ws_sprite_cull: ${labels['ws_sprite_cull']:06X}  (4 cull sites, margin {SPRITE_MARGIN}px)")
+    print(f"object X gate : $80:C948  threshold ${object_threshold:04X} (stock $0090)")
+    print("object scanner: $80:C91C  every wake (stock every 4 ticks)")
     print(f"test ROM      : {out_rom}")
     print(f"widescreen IPS: {out_ips} ({len(ips)} bytes)")
     print(f"SHA-256       : {build.digest(bytes(rom), 'sha256')}")
