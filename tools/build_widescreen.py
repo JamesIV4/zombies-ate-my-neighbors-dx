@@ -25,8 +25,10 @@ Mesen-verified facts:
   * scheduler tick   $0020 (incremented once per frame at $80:8372)
   * gameplay guards  $0E == 2 AND $0D25 != 0 (0 during level load)
   * camera           $1B6A/$1B6C ; BG1 base $1B7E (=$7800) ; thresh $DC (=$70)
-  * VRAM col table   $80:9D77[(mc&63)*2] ; map cell $7F:(rowbase+col*2),
-                     rowbase=$7E:4328[row*2] ; priority (cell&$1FF)<$DC -> OR $2000
+  * BG1 ring origin  $1B76/$1B7A ; tilemap col/row for the camera's top-left tile
+  * VRAM col table   $80:9D77[(($1B76+offset)&63)*2] ; map cell
+                     $7F:(rowbase+col*2), rowbase=$7E:4328[row*2] ;
+                     priority (cell&$1FF)<$DC -> OR $2000
   * queue            src $1B84/bank $1BB4/vram $1BE4/vmain $1C14/size $1C44, len $CE
   * free WRAM        map ends ~$7F:8F00, so $7F:F000+ is free (mailbox $FFF0)
 """
@@ -119,8 +121,12 @@ g_have:
     ADC ${CAMCOL:06X}
     STA ${MC:06X}
     LDA ${MC:06X}
-    BPL g_mc_ok
-    LDA #$FFFF                  ; off the left edge -> mark slot skipped
+    BMI g_skip                  ; off the left edge
+    ASL
+    CMP $B2                     ; row stride in bytes == map width * 2
+    BCC g_mc_ok
+g_skip:
+    LDA #$FFFF                  ; off the map edge -> mark slot skipped
     PHA
     LDA ${SIDX:06X}
     ASL
@@ -129,7 +135,6 @@ g_have:
     STA ${VRAMDEST:06X},X
     JMP g_next
 g_mc_ok:
-    ASL
     STA ${MCX2:06X}
     LDA ${SIDX:06X}
     ASL
@@ -162,6 +167,10 @@ g_row:
 g_no_pri:
     PHA
     LDA ${WROW:06X}
+    SEC
+    SBC ${CAMROW:06X}
+    CLC
+    ADC $1B7A                   ; BG1 tilemap row at camera top
     AND #$001F
     ASL
     CLC
@@ -175,6 +184,10 @@ g_no_pri:
     DEY
     BNE g_row
     LDA ${MC:06X}
+    SEC
+    SBC ${CAMCOL:06X}
+    CLC
+    ADC $1B76                   ; BG1 tilemap col at camera left
     AND #$003F
     ASL
     TAX

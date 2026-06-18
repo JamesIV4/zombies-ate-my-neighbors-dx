@@ -1,6 +1,6 @@
--- Verify the widescreen pipeline produced correct data: after scrolling, the
--- gathered colbuf must match the level map, and the VRAM strip column must match
--- the colbuf (proving gather -> enqueue -> DMA worked).
+-- Verify the widescreen pipeline produced correct data: after scrolling, each
+-- gathered colbuf must match the level map, target the game's BG1 ring-buffer
+-- column/row, and match VRAM after DMA.
 local wram = emu.memType.snesWorkRam
 local vram = emu.memType.snesVideoRam
 local frame, gp = 0, nil
@@ -11,6 +11,43 @@ local function r16(a) return emu.read16(a, wram) end
 local function w7f(a) return emu.read(0x10000 + a, wram) end          -- $7F byte
 local function w7f16(a) return w7f(a) + w7f(a + 1) * 256 end
 local function vw(word) return emu.read(word * 2, vram) + emu.read(word * 2 + 1, vram) * 256 end
+
+local function band(a, b)
+	local r, bit = 0, 1
+	while a > 0 or b > 0 do
+		if (a % 2) == 1 and (b % 2) == 1 then r = r + bit end
+		a = math.floor(a / 2)
+		b = math.floor(b / 2)
+		bit = bit * 2
+	end
+	return r
+end
+
+local function bor(a, b)
+	local r, bit = 0, 1
+	while a > 0 or b > 0 do
+		if (a % 2) == 1 or (b % 2) == 1 then r = r + bit end
+		a = math.floor(a / 2)
+		b = math.floor(b / 2)
+		bit = bit * 2
+	end
+	return r
+end
+
+local function col_addr(col)
+	if col < 32 then return col end
+	return 0x0400 + (col - 32)
+end
+
+local function slot_offset(sidx)
+	if sidx < 4 then return sidx - 4 end
+	return sidx + 28
+end
+
+local function priority_cell(cell)
+	if band(cell, 0x01FF) < r16(0x00DC) then return bor(cell, 0x2000) end
+	return cell
+end
 
 local function set_input()
 	if r8(0x000E) == 2 then
@@ -27,38 +64,68 @@ end
 local function dump()
 	local camcol = math.floor(r16(0x1B6A) / 8)
 	local camrow = math.floor(r16(0x1B6C) / 8)
-	local b2 = r16(0x00B2)
-	out:write(string.format("camcol=%d camrow=%d rowstride=%04X lasttick=%04X\n",
-		camcol, camrow, b2, w7f16(0xFFE0)))
+	local ringcol = r16(0x1B76)
+	local ringrow = r16(0x1B7A)
+	local bgbase = r16(0x1B7E)
+	local rowstride = r16(0x00B2)
+	local failures = 0
+
+	out:write(string.format(
+		"camcol=%d camrow=%d ringcol=%d ringrow=%d bgbase=%04X rowstride=%04X lasttick=%04X\n",
+		camcol, camrow, ringcol, ringrow, bgbase, rowstride, w7f16(0xFFE0)))
 	out:write("VRAMDEST[0..7]:")
 	for i = 0, 7 do out:write(string.format(" %04X", w7f16(0xFFD0 + i * 2))) end
 	out:write("\n")
 
-	-- slot 4 = right strip, off = +32 (sidx>=4 -> sidx+28; sidx4 -> 32); mc=camcol+32
-	local sidx = 4
-	local mc = camcol + 32
-	local dest = w7f16(0xFFD0 + sidx * 2)
-	local bufoff = 0xFDC0 + sidx * 64
-	out:write(string.format("\nslot %d mc=%d colbuf=$%04X dest=$%04X\n", sidx, mc, bufoff, dest))
-	out:write("colbuf  :")
-	for r = 0, 7 do out:write(string.format(" %04X", w7f16(bufoff + r * 2))) end
-	out:write("\nVRAM col:")          -- VMAIN $81 wrote words dest+r*32
-	for r = 0, 7 do out:write(string.format(" %04X", vw((dest + r * 32) % 0x8000))) end
-	out:write("\nmap cell:")          -- cell(mc,row) = $7F:( rowbase[row] + mc*2 )
-	for r = 0, 7 do
-		local row = camrow + r
-		local vrow = row % 32
-		local rowbase = (r8(0x4328 + row * 2) + r8(0x4328 + row * 2 + 1) * 256)
-		local cell = w7f16((rowbase + mc * 2) % 0x10000)
-		out:write(string.format(" [%d]=%04X", vrow, cell))
+	for sidx = 0, 7 do
+		local off = slot_offset(sidx)
+		local mc = camcol + off
+		local dest = w7f16(0xFFD0 + sidx * 2)
+		local bufoff = 0xFDC0 + sidx * 64
+		local tilecol = (ringcol + off) % 64
+		local expected_dest = bgbase + col_addr(tilecol)
+		local skip = mc < 0 or (mc * 2) >= rowstride
+
+		out:write(string.format(
+			"\nslot %d off=%d mc=%d tilecol=%d colbuf=$%04X dest=$%04X expected=$%04X\n",
+			sidx, off, mc, tilecol, bufoff, dest, expected_dest))
+
+		if skip then
+			if dest ~= 0xFFFF then
+				failures = failures + 1
+				out:write("  FAIL: edge slot was not skipped\n")
+			end
+		else
+			if dest ~= expected_dest then
+				failures = failures + 1
+				out:write("  FAIL: wrong VRAM destination\n")
+			end
+
+			for r = 0, 31 do
+				local worldrow = camrow + r
+				local tilerow = (ringrow + r) % 32
+				local rowbase = r8(0x4328 + worldrow * 2) + r8(0x4328 + worldrow * 2 + 1) * 256
+				local expected = priority_cell(w7f16((rowbase + mc * 2) % 0x10000))
+				local got_buf = w7f16(bufoff + tilerow * 2)
+				local got_vram = vw((dest + tilerow * 32) % 0x8000)
+
+				if got_buf ~= expected or got_vram ~= expected then
+					failures = failures + 1
+					out:write(string.format(
+						"  FAIL row=%d tilerow=%d expected=%04X colbuf=%04X vram=%04X\n",
+						worldrow, tilerow, expected, got_buf, got_vram))
+				end
+			end
+		end
 	end
-	out:write("\n")
+	out:write(string.format("\nfailures=%d\n", failures))
 	out:flush()
+	if failures == 0 then out:close() emu.stop(0) else out:close() emu.stop(1) end
 end
 
 local function end_frame()
 	frame = frame + 1
-	if gp and (frame - gp) >= 400 then dump() out:close() emu.stop(0)
+	if gp and (frame - gp) >= 400 then dump()
 	elseif frame > 8000 then out:write("no gameplay\n") out:close() emu.stop(2) end
 end
 
