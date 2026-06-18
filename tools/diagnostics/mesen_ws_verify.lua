@@ -11,6 +11,7 @@ local N = 10
 local NSLOT = 2 * N
 local COLBUF = 0xF000
 local LASTTICK = 0xF52E
+local BLACK_CELL = 0x2BFF
 local frame, gp = 0, nil
 local out = io.open("s:/Repos/zombies-ate-my-neighbors-dx/mesen-ws-verify.txt", "w")
 
@@ -98,24 +99,25 @@ local function dump()
 		local skip = mc < 0 or (mc * 2) >= rowstride
 
 		out:write(string.format("slot %d off=%d mc=%d tilecol=%d colbuf=$%04X dest=$%04X%s\n",
-			sidx, off, mc, tilecol, bufoff, dest, skip and "  (off-map, skipped)" or ""))
+			sidx, off, mc, tilecol, bufoff, dest, skip and "  (off-map, black)" or ""))
 
-		if not skip then
-			checked = checked + 1
-			for r = 0, 31 do
-				local worldrow = camrow + r
-				local tilerow = (ringrow + r) % 32
+		checked = checked + 1
+		for r = 0, 31 do
+			local worldrow = camrow + r
+			local tilerow = (ringrow + r) % 32
+			local expected = BLACK_CELL
+			if not skip then
 				local rowbase = r8(0x4328 + worldrow * 2) + r8(0x4328 + worldrow * 2 + 1) * 256
-				local expected = priority_cell(w7f16((rowbase + mc * 2) % 0x10000))
-				local got_buf = w7f16(bufoff + tilerow * 2)
-				local got_vram = vw((dest + tilerow * 32) % 0x8000)
+				expected = priority_cell(w7f16((rowbase + mc * 2) % 0x10000))
+			end
+			local got_buf = w7f16(bufoff + tilerow * 2)
+			local got_vram = vw((dest + tilerow * 32) % 0x8000)
 
-				if got_buf ~= expected or got_vram ~= expected then
-					failures = failures + 1
-					out:write(string.format(
-						"  FAIL row=%d tilerow=%d expected=%04X colbuf=%04X vram=%04X\n",
-						worldrow, tilerow, expected, got_buf, got_vram))
-				end
+			if got_buf ~= expected or got_vram ~= expected then
+				failures = failures + 1
+				out:write(string.format(
+					"  FAIL row=%d tilerow=%d expected=%04X colbuf=%04X vram=%04X\n",
+					worldrow, tilerow, expected, got_buf, got_vram))
 			end
 		end
 	end

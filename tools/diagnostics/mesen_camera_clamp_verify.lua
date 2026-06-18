@@ -5,6 +5,7 @@ local wram = emu.memType.snesWorkRam
 local snes = emu.memType.snesMemory
 local frame, gp = 0, nil
 local out = io.open("s:/Repos/zombies-ate-my-neighbors-dx/mesen-camera-clamp.txt", "w")
+local RIGHT_MARGIN = 0x0040
 
 local attempts = 0
 local phase = "boot"
@@ -39,12 +40,13 @@ end
 local function on_right_entry()
 	if not gp or attempts >= 2 then return end
 	attempts = attempts + 1
+	local max_x = r16(0x00B8)
 	if attempts == 1 then
 		phase = "allow"
-		w16(0x1B6A, 0x042F)
+		w16(0x1B6A, max_x - RIGHT_MARGIN - 1)
 	elseif attempts == 2 then
 		phase = "block"
-		w16(0x1B6A, 0x0430)
+		w16(0x1B6A, max_x - RIGHT_MARGIN)
 	end
 	out:write(string.format("right-entry attempt=%d phase=%s camX=%04X maxX=%04X\n",
 		attempts, phase, r16(0x1B6A), r16(0x00B8)))
@@ -66,7 +68,7 @@ local function end_frame()
 			"result camX=%04X maxX=%04X allow_continues=%d block_continues=%d\n",
 			r16(0x1B6A), r16(0x00B8), allow_continues, block_continues))
 		out:close()
-		if allow_continues >= 1 and block_continues == 0 and r16(0x1B6A) == 0x0430 then
+		if allow_continues >= 1 and block_continues == 0 and r16(0x1B6A) == r16(0x00B8) - RIGHT_MARGIN then
 			emu.stop(0)
 		else
 			emu.stop(1)

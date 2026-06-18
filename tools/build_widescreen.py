@@ -17,11 +17,12 @@ Two hooks:
               leading column(s) that scrolled in, plus a small round-robin "trickle"
               of TRICKLE columns to keep the rest fresh (covers vertical scroll and
               direction changes). On level load / warp (first frame or a >=4 tile
-              jump) it does a one-frame full refill of all columns. Per-frame cost is
-              therefore bounded (~leading + TRICKLE columns) no matter how wide the
-              strips are. The heavy loop runs with DB=$7F so map/colbuf/scratch are
-              cheap absolute accesses, and walks the map with a running +$160 row
-              pointer (the row-base table $7E:4328 is exactly row*$160).
+              jump) it does a one-frame full refill of all columns. After movement
+              stops, REFDEBT lets trickle catch up once, then the gather idles until
+              the camera crosses another tile. Moving-camera cost is therefore bounded
+              (~leading + TRICKLE columns) no matter how wide the strips are. The
+              heavy loop runs with DB=$7F so map/colbuf/scratch are cheap absolute
+              accesses, and walks the map with the live row stride $B2.
   * ENQUEUE - in vblank, at the VRAM-queue drain $80:9E7B. Cheap: appends the
               gathered colbufs to the game's own VRAM-DMA queue, marks each consumed
               ($FFFF) so it is not re-uploaded, then lets the drain DMA them and zero
@@ -32,9 +33,9 @@ Two hooks:
               The render-list build also appends active type-$05 objects that are
               already in object slots but missing from $137E just outside the
               normal horizontal window.
-  * CAMERA  - the stock horizontal edge lock is guarded so it triggers one strip
-              width earlier on the left/right edges. This keeps bsnes-hd's extra
-              columns inside the level map instead of exposing stale off-map VRAM.
+  * CAMERA  - the stock horizontal edge lock is guarded with tuned left/right
+              margins. True off-map strip columns are filled with opaque black so
+              level starts that are already past a margin don't expose stale VRAM.
 
 Mesen-verified facts:
   * dispatcher entry $80:A93F (PHD; LDA #$0000; TCD ...), reached via ptr at $A93C
@@ -45,7 +46,7 @@ Mesen-verified facts:
   * BG1 ring origin  $1B76/$1B7A ; tilemap col/row for the camera's top-left tile
   * horizontal scroll $80:A68B (left) / $80:A70A (right), max camera X $00B8
   * VRAM col table   $80:9D77[(($1B76+offset)&63)*2] ; map cell $7F:(rowbase+col*2)
-  * row-base table   $7E:4328[row*2] == row*$160 (arithmetic; rowstride $B2=$0160)
+  * row-base table   $7E:4328[row*2] gives row start; live rowstride is $B2 bytes
   * priority         (cell&$1FF)<$DC -> OR $2000
   * queue            src $1B84/bank $1BB4/vram $1BE4/vmain $1C14/size $1C44, len $CE
   * free WRAM        map ends ~$7F:8F00, so $7F:F000+ is free (mailbox $FFF0)
@@ -80,15 +81,35 @@ ROUTINE_FILE = (0x8F & 0x7F) * 0x8000 + (0xCC00 - 0x8000)  # 0x7CC00
 # generous. 10 (=80px/side) comfortably covers 16:9 with margin.
 NSTRIP = 10
 NSLOT = 2 * NSTRIP          # total strip columns (left + right)
-TRICKLE = 8                 # round-robin columns refreshed per frame (vertical/reverse)
+TRICKLE = 4                 # round-robin columns refreshed per frame (vertical/reverse)
 LEADCAP = 3                 # max leading columns gathered on a horizontal crossing
 FULLJMP = 4                 # >= this many tiles moved in one frame -> full refill
+REFDEBT_FRAMES = (NSLOT + TRICKLE - 1) // TRICKLE
 
 # How far past the 256px window (in px) the OAM-build engine is allowed to draw a
 # sprite, so active actors in the widescreen strips are rendered (display-only; the
 # game still culls truly off-screen sprites). Matches the BG strip width.
 SPRITE_MARGIN = NSTRIP * 8
-CAMERA_EDGE_MARGIN = NSTRIP * 8
+# Camera clamp is deliberately separate from strip fill width. The BG hook still
+# maintains 10 columns per side, but visual testing showed the camera edge lock was
+# hiding real level data, especially at the left edge.
+CAMERA_LEFT_MARGIN_TILES = 8
+CAMERA_RIGHT_MARGIN_TILES = 8
+CAMERA_LEFT_MARGIN = CAMERA_LEFT_MARGIN_TILES * 8
+CAMERA_RIGHT_MARGIN = CAMERA_RIGHT_MARGIN_TILES * 8
+# Opaque black off-map tile: BG1 char base is $1000 words, tile $3FF is outside the
+# observed level tile range. The tile data uses pixel color $A, and palette 2 color
+# $A (CGRAM $2A) is black in the level-loading/gameplay palettes. Priority keeps BG2
+# garbage from showing through.
+BLACK_TILE_INDEX = 0x03FF
+BLACK_CELL = 0x2000 | (2 << 10) | BLACK_TILE_INDEX
+BLACK_TILE_VRAM = 0x1000 + BLACK_TILE_INDEX * 16
+BLACK_COLUMN_SRC = 0xD2A0
+BLACK_TILE_SRC = 0xD2E0
+BLACK_COLUMN_FILE = (0x8F & 0x7F) * 0x8000 + (BLACK_COLUMN_SRC - 0x8000)
+BLACK_TILE_FILE = (0x8F & 0x7F) * 0x8000 + (BLACK_TILE_SRC - 0x8000)
+BLACK_COLUMN_BYTES = bytes([BLACK_CELL & 0xFF, BLACK_CELL >> 8] * 32)
+BLACK_TILE_BYTES = bytes(([0x00, 0xFF] * 8) + ([0x00, 0xFF] * 8))
 OBJECT_ACTIVATION_MARGIN = SPRITE_MARGIN
 VICTIM_ACTIVATION_MARGIN = SPRITE_MARGIN
 TYPE05_SLOT_FIRST = 0x185E
@@ -106,10 +127,15 @@ PREVSTRIDE = SB + 0x1C      # last frame's map width ($B2); change => level/map 
 FULLF = SB + 0x1E
 LEADLO, LEADHI, LEADN = SB + 0x20, SB + 0x22, SB + 0x24
 PREVCOL, PREVROW, REFCUR, INITDONE, LASTTICK = (SB + 0x26 + 2 * i for i in range(5))  # 26..2E
-VRAMDEST = SB + 0x40      # NSLOT words ($FFFF = column skipped / already consumed)
+REFDEBT = SB + 0x30          # trickle frames left after camera tile movement stops
+VRAMDEST = SB + 0x40      # NSLOT words ($FFFF = no pending upload / already consumed)
 
 # enqueue runs with DB=0; it reaches $7F scratch via long addressing
 SIDX_L = 0x7F0000 + SIDX
+CAMCOL_L = 0x7F0000 + CAMCOL
+MC_L = 0x7F0000 + MC
+MCX2_L = 0x7F0000 + MCX2
+FULLF_L = 0x7F0000 + FULLF
 VD_L = 0x7F0000 + VRAMDEST
 
 SOURCE = f"""
@@ -208,13 +234,29 @@ g_full:
     STA ${INITDONE:04X}
     LDA #$0000
     STA ${REFCUR:04X}
+    STA ${REFDEBT:04X}
     BRA g_iter
 g_incr:
     LDA #$0000
     STA ${FULLF:04X}
+    LDA ${DCOL:04X}
+    BNE g_mark_moved
+    LDA ${DROW:04X}
+    BNE g_mark_moved
+    LDA ${REFDEBT:04X}
+    BNE g_debt_live
+    JMP g_noadv                ; nothing new to gather/upload this frame
+g_debt_live:
+    DEC
+    STA ${REFDEBT:04X}
+    BRA g_ld_zero
+g_mark_moved:
+    LDA #${REFDEBT_FRAMES:04X}
+    STA ${REFDEBT:04X}
     ; leading-column window from DCOL
     LDA ${DCOL:04X}
     BNE g_ld_nz
+g_ld_zero:
     LDA #$7FFF                  ; DCOL==0: empty window
     STA ${LEADLO:04X}
     LDA #$8000
@@ -323,19 +365,6 @@ g_s_have:
     CLC
     ADC ${CAMCOL:04X}
     STA ${MC:04X}
-    BMI g_s_skip                ; off the left edge
-    ASL
-    STA ${MCX2:04X}
-    CMP $0000B2                 ; row stride in bytes == map width * 2
-    BCC g_s_ok
-g_s_skip:
-    LDA ${SIDX:04X}
-    ASL
-    TAX
-    LDA #$FFFF
-    STA ${VRAMDEST:04X},X       ; mark slot skipped
-    RTS
-g_s_ok:
     LDA ${SIDX:04X}             ; CSB = SIDX*64 (colbuf base for this slot)
     ASL
     ASL
@@ -353,6 +382,31 @@ g_s_ok:
     CLC
     ADC ${CSB:04X}
     TAY
+    LDA ${MC:04X}
+    BMI g_s_black               ; off the left edge
+    ASL
+    STA ${MCX2:04X}
+    CMP $0000B2                 ; row stride in bytes == map width * 2
+    BCC g_s_ok
+g_s_black:
+    LDX #$0020
+g_black_row:
+    LDA #${BLACK_CELL:04X}
+    STA ${COLBUF:04X},Y
+    INY
+    INY
+    CPY ${WRAPAT:04X}
+    BNE g_black_nw
+    TYA                         ; wrap ring write back to column start
+    SEC
+    SBC #$0040
+    TAY
+g_black_nw:
+    DEX
+    BNE g_black_row
+    JSR g_set_dest
+    RTS
+g_s_ok:
     LDA ${CAMROW:04X}           ; X = rowbase[CAMROW] + MC*2  (map source)
     ASL
     TAX
@@ -395,6 +449,10 @@ g_nw:
     TAX
     CPX ${SRCEND:04X}
     BNE g_row
+    JSR g_set_dest
+    RTS
+
+g_set_dest:
     ; VRAMDEST[slot] = bgbase + $80:9D77[((RINGCOL + off)&63)*2]
     LDA ${MC:04X}
     SEC
@@ -432,6 +490,10 @@ enqueue_entry:
     LDA #$00
     PHA
     PLB                         ; DB = 0
+    REP #$20
+    JSR e_black_tile
+    JSR e_load_black_cols
+    SEP #$20
     LDA $0E
     CMP #$02
     BNE e_bail
@@ -506,6 +568,116 @@ e_exit:
     JML $809E7F
 e_drain_skip:
     JML $809ECE
+
+e_black_tile:
+    LDA $00000E
+    AND #$00FF
+    CMP #$0002
+    BNE e_bt_active             ; level-load/menu-like visible states need the tile now
+    LDA ${FULLF_L:06X}
+    BEQ e_bt_done               ; during gameplay, the tile only needs refresh on refill
+e_bt_active:
+    LDA $000D25                 ; active during gameplay and some visible level-load states
+    AND #$00FF
+    BEQ e_bt_done
+    BIT $26
+    BVS e_bt_done
+    LDX $CE
+    CPX #$002E
+    BCS e_bt_done
+    LDA #${BLACK_TILE_SRC:04X}
+    STA $1B84,X
+    LDA #$008F
+    STA $1BB4,X
+    LDA #${BLACK_TILE_VRAM:04X}
+    STA $1BE4,X
+    LDA #$0080                  ; linear VRAM increment for 4bpp tile graphics
+    STA $1C14,X
+    LDA #$0020
+    STA $1C44,X
+    INX
+    INX
+    STX $CE
+e_bt_done:
+    RTS
+
+e_load_black_cols:
+    LDA $00000E
+    AND #$00FF
+    CMP #$0002
+    BEQ e_lbc_done              ; gameplay gather/enqueue handles off-map strips
+    LDA $000D25
+    AND #$00FF
+    BEQ e_lbc_done
+    LDA $001B6A
+    LSR
+    LSR
+    LSR
+    STA ${CAMCOL_L:06X}
+    LDA #$0000
+    STA ${SIDX_L:06X}
+e_lbc_loop:
+    LDA ${SIDX_L:06X}
+    CMP #${NSLOT:04X}
+    BCS e_lbc_done
+    CMP #${NSTRIP:04X}
+    BCC e_lbc_left
+    CLC
+    ADC #${32 - NSTRIP:04X}
+    BRA e_lbc_haveoff
+e_lbc_left:
+    SEC
+    SBC #${NSTRIP:04X}
+e_lbc_haveoff:
+    STA ${MC_L:06X}             ; temporary: signed strip offset
+    CLC
+    ADC ${CAMCOL_L:06X}
+    BMI e_lbc_black
+    ASL
+    CMP $0000B2
+    BCC e_lbc_next
+e_lbc_black:
+    JSR e_queue_black_col
+e_lbc_next:
+    LDA ${SIDX_L:06X}
+    INC
+    STA ${SIDX_L:06X}
+    BRA e_lbc_loop
+e_lbc_done:
+    RTS
+
+e_queue_black_col:
+    LDX $CE
+    CPX #$002E
+    BCC e_qbc_room
+    RTS
+e_qbc_room:
+    PHX
+    LDA ${MC_L:06X}             ; signed strip offset from e_lbc_haveoff
+    CLC
+    ADC $001B76
+    AND #$003F
+    ASL
+    TAX
+    LDA $809D77,X
+    CLC
+    ADC $001B7E
+    STA ${MCX2_L:06X}
+    PLX
+    LDA #${BLACK_COLUMN_SRC:04X}
+    STA $1B84,X
+    LDA #$008F
+    STA $1BB4,X
+    LDA ${MCX2_L:06X}
+    STA $1BE4,X
+    LDA #$0081
+    STA $1C14,X
+    LDA #$0040
+    STA $1C44,X
+    INX
+    INX
+    STX $CE
+    RTS
 
 ; ================= TYPE-$05 RENDER-LIST RELAX (items/survivors) =================
 ; Replaces the stock pair JSR $BCE2 / JSR $BC23 with one long helper. It rebuilds
@@ -684,15 +856,16 @@ wsc_cull:
     RTL
 
 ; ================= CAMERA EDGE CLAMP (widescreen strips) =================
-; Let the stock horizontal camera edge lock happen one strip-width earlier so
-; bsnes-hd's extra columns still land inside the level map at the left/right edges.
+; Let the stock horizontal camera edge lock happen earlier so bsnes-hd's extra
+; columns mostly land inside the level map at the left/right edges. Any truly
+; off-map strip columns are filled black by g_slot.
 ; If scrolling is still allowed, jump back into the original per-pixel scroll
 ; routine immediately after its stock edge test; the original VRAM streaming stays
 ; unchanged. Vertical camera bounds remain stock.
 ws_scroll_left_guard:
     LDA $001B6A
-    CMP #${CAMERA_EDGE_MARGIN + 1:04X}
-    BCS wsl_continue           ; allow DEC down to exactly CAMERA_EDGE_MARGIN
+    CMP #${CAMERA_LEFT_MARGIN + 1:04X}
+    BCS wsl_continue           ; allow DEC down to exactly CAMERA_LEFT_MARGIN
     RTL
 wsl_continue:
     JML $80A690
@@ -700,9 +873,9 @@ wsl_continue:
 ws_scroll_right_guard:
     LDA $001B6A
     CLC
-    ADC #${CAMERA_EDGE_MARGIN:04X}
+    ADC #${CAMERA_RIGHT_MARGIN:04X}
     CMP $0000B8
-    BCC wsr_continue           ; allow INC up to maxX-CAMERA_EDGE_MARGIN
+    BCC wsr_continue           ; allow INC up to maxX-CAMERA_RIGHT_MARGIN
     RTL
 wsr_continue:
     LDA $001B6A
@@ -712,9 +885,9 @@ wsr_continue:
 
 def main() -> int:
     code, labels = asm.assemble(SOURCE, ORG)
-    limit = 0x700  # spare region $8F:CC00..$8F:D2FF
+    limit = BLACK_COLUMN_SRC - (ORG & 0xFFFF)  # reserve $8F:D2A0..D2FF for black column/tile data
     if len(code) > limit:
-        raise SystemExit(f"routine too large: {len(code)} bytes > {limit} free")
+        raise SystemExit(f"routine too large: {len(code)} bytes > {limit} free before black data")
 
     base = (ROOT / build.DEFAULT_ROM).read_bytes()
     rom = build.patch_rom(base)
@@ -732,6 +905,8 @@ def main() -> int:
     patch(0x268B, "AD 6A 1B F0", labels["ws_scroll_left_guard"])   # $80:A68B
     patch(0x270A, "AD 6A 1B C5", labels["ws_scroll_right_guard"])  # $80:A70A
     rom[ROUTINE_FILE:ROUTINE_FILE + len(code)] = code
+    rom[BLACK_COLUMN_FILE:BLACK_COLUMN_FILE + len(BLACK_COLUMN_BYTES)] = BLACK_COLUMN_BYTES
+    rom[BLACK_TILE_FILE:BLACK_TILE_FILE + len(BLACK_TILE_BYTES)] = BLACK_TILE_BYTES
 
     # Replace JSR $BCE2 / JSR $BC23 in the sprite engine with one long helper that
     # rebuilds the normal render list, appends widened type-$05 entries, and clears OAM.
@@ -834,7 +1009,7 @@ def main() -> int:
     print(f"g_slot        : ${labels['g_slot']:06X}")
     print(f"enqueue_entry : ${labels['enqueue_entry']:06X}")
     print(f"ws_sprite_cull: ${labels['ws_sprite_cull']:06X}  (4 cull sites, margin {SPRITE_MARGIN}px)")
-    print(f"camera clamp  : $80:A68B/$A70A  margin {CAMERA_EDGE_MARGIN}px")
+    print(f"camera clamp  : $80:A68B/$A70A  left {CAMERA_LEFT_MARGIN}px, right {CAMERA_RIGHT_MARGIN}px")
     print(f"object X gate : $80:C948  threshold ${object_threshold:04X} (stock $0090)")
     print("object scanner: $80:C91C  every wake (stock every 4 ticks)")
     print(f"victim X gate : $81:823C  threshold ${victim_threshold:04X} (stock $00A0)")
