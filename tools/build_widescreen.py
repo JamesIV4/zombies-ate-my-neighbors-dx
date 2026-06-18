@@ -10,14 +10,21 @@ spawning and aggro are unchanged.
 
 Two hooks:
   * GATHER  - at the per-frame scroll dispatcher $80:A93F (a proven-safe, register-
-              preserving trampoline). The dispatcher is called many times per frame
-              (1px camera step each), so the gather is gated to run ONCE per frame
-              via the scheduler tick $20. It builds the 8 strip columns into colbufs
-              in free $7F and records each column's VRAM destination. No queue here.
+              preserving trampoline). Gated to run ONCE per frame via the scheduler
+              tick $20. It is INCREMENTAL: the camera moves ~2px/frame, so a new tile
+              column only appears every ~4 frames. Each frame it gathers just the
+              leading column(s) that scrolled in, plus a small round-robin "trickle"
+              of TRICKLE columns to keep the rest fresh (covers vertical scroll and
+              direction changes). On level load / warp (first frame or a >=4 tile
+              jump) it does a one-frame full refill of all columns. Per-frame cost is
+              therefore bounded (~leading + TRICKLE columns) no matter how wide the
+              strips are. The heavy loop runs with DB=$7F so map/colbuf/scratch are
+              cheap absolute accesses, and walks the map with a running +$160 row
+              pointer (the row-base table $7E:4328 is exactly row*$160).
   * ENQUEUE - in vblank, at the VRAM-queue drain $80:9E7B. Cheap: appends the
-              pre-gathered colbufs to the game's own VRAM-DMA queue, then lets the
-              drain DMA them and zero $CE so the game's "wait for queue empty"
-              spin-waits ($80:8372 scheduler, $80:A545 load) still complete.
+              gathered colbufs to the game's own VRAM-DMA queue, marks each consumed
+              ($FFFF) so it is not re-uploaded, then lets the drain DMA them and zero
+              $CE so the game's "wait for queue empty" spin-waits still complete.
 
 Mesen-verified facts:
   * dispatcher entry $80:A93F (PHD; LDA #$0000; TCD ...), reached via ptr at $A93C
@@ -26,9 +33,9 @@ Mesen-verified facts:
   * gameplay guards  $0E == 2 AND $0D25 != 0 (0 during level load)
   * camera           $1B6A/$1B6C ; BG1 base $1B7E (=$7800) ; thresh $DC (=$70)
   * BG1 ring origin  $1B76/$1B7A ; tilemap col/row for the camera's top-left tile
-  * VRAM col table   $80:9D77[(($1B76+offset)&63)*2] ; map cell
-                     $7F:(rowbase+col*2), rowbase=$7E:4328[row*2] ;
-                     priority (cell&$1FF)<$DC -> OR $2000
+  * VRAM col table   $80:9D77[(($1B76+offset)&63)*2] ; map cell $7F:(rowbase+col*2)
+  * row-base table   $7E:4328[row*2] == row*$160 (arithmetic; rowstride $B2=$0160)
+  * priority         (cell&$1FF)<$DC -> OR $2000
   * queue            src $1B84/bank $1BB4/vram $1BE4/vmain $1C14/size $1C44, len $CE
   * free WRAM        map ends ~$7F:8F00, so $7F:F000+ is free (mailbox $FFF0)
 """
@@ -56,14 +63,34 @@ DISP_HOOK_FILE = 0x293F    # $80:A93F  PHD;LDA #$0000  (dispatcher entry)
 DRAIN_HOOK_FILE = 0x1E7B   # $80:9E7B  BIT $26;BVS $9ECE  (VRAM-queue drain)
 ROUTINE_FILE = (0x8F & 0x7F) * 0x8000 + (0xCC00 - 0x8000)  # 0x7CC00
 
-COLBUF = 0xFDC0            # 8 columns * 64 bytes -> $7F:FDC0-$FFBF
-S = 0x7FFFC0
-CAMCOL, CAMROW, SIDX, MC, MCX2, BUFOFF, WROW, WCELL = (S + 2 * i for i in range(8))
-VRAMDEST = 0x7FFFD0        # 8 words, $FFFF = column skipped
-LASTTICK = 0x7FFFE0        # last scheduler tick we gathered on
+# Strip columns filled per side. bsnes-hd renders a fixed number of extra columns
+# per side based on its aspect setting; NSTRIP must cover that. Cost is now bounded
+# by the per-frame gather budget (leading + TRICKLE), NOT by NSTRIP, so this can be
+# generous. 10 (=80px/side) comfortably covers 16:9 with margin.
+NSTRIP = 10
+NSLOT = 2 * NSTRIP          # total strip columns (left + right)
+TRICKLE = 8                 # round-robin columns refreshed per frame (vertical/reverse)
+LEADCAP = 3                 # max leading columns gathered on a horizontal crossing
+FULLJMP = 4                 # >= this many tiles moved in one frame -> full refill
+
+# WRAM scratch, all in free high $7F. In the gather DB=$7F so these are 4-hex ("abs")
+# operands; in the enqueue DB=0 so the few it needs are written as 6-hex ("long").
+COLBUF = 0xF000            # NSLOT columns * 64 bytes -> $7F:F000.. (must clear SB)
+SB = 0xF500               # scratch base
+CAMCOL, CAMROW, RINGCOL, RINGROW, THRESH = (SB + 2 * i for i in range(5))   # 00..08
+SIDX, MC, MCX2, CSB, WRAPAT, SRCEND, WCELL = (SB + 0x0A + 2 * i for i in range(7))  # 0A..16
+DCOL, DROW = SB + 0x18, SB + 0x1A
+FULLF = SB + 0x1E
+LEADLO, LEADHI, LEADN = SB + 0x20, SB + 0x22, SB + 0x24
+PREVCOL, PREVROW, REFCUR, INITDONE, LASTTICK = (SB + 0x26 + 2 * i for i in range(5))  # 26..2E
+VRAMDEST = SB + 0x40      # NSLOT words ($FFFF = column skipped / already consumed)
+
+# enqueue runs with DB=0; it reaches $7F scratch via long addressing
+SIDX_L = 0x7F0000 + SIDX
+VD_L = 0x7F0000 + VRAMDEST
 
 SOURCE = f"""
-; ============ GATHER (dispatcher $80:A93F, gated once per frame) ============
+; ================= GATHER (dispatcher $80:A93F, once/frame, incremental) =================
 gather_entry:
     JSL disp_stub               ; run the original per-frame scroll dispatcher
     PHP
@@ -76,137 +103,173 @@ gather_entry:
     LDA #$0000
     TCD                         ; DP = 0
     SEP #$20
-    LDA #$00
+    LDA #$7F
     PHA
-    PLB                         ; DB = 0
-    LDA $0E
-    CMP #$02
-    BNE g_bail
-    LDA $0D25
-    BNE g_chk
-g_bail:
-    JMP g_exit
-g_chk:
+    PLB                         ; DB = $7F (scratch/colbuf/map are now abs)
     REP #$20
-    LDA $20                     ; scheduler frame tick
-    CMP ${LASTTICK:06X}
+    LDA $00000E
+    AND #$00FF
+    CMP #$0002
+    BEQ g_g1
+    JMP g_exit
+g_g1:
+    LDA $000D25
+    AND #$00FF
+    BNE g_g2
+    JMP g_exit
+g_g2:
+    LDA $000020                 ; scheduler frame tick
+    CMP ${LASTTICK:04X}
     BNE g_run
     JMP g_exit                  ; already gathered this frame
 g_run:
-    STA ${LASTTICK:06X}
-    LDA $1B6A
+    STA ${LASTTICK:04X}
+    ; --- read inputs ---
+    LDA $001B6A
     LSR
     LSR
     LSR
-    STA ${CAMCOL:06X}
-    LDA $1B6C
+    STA ${CAMCOL:04X}
+    LDA $001B6C
     LSR
     LSR
     LSR
-    STA ${CAMROW:06X}
+    STA ${CAMROW:04X}
+    LDA $001B76
+    STA ${RINGCOL:04X}
+    LDA $001B7A
+    STA ${RINGROW:04X}
+    LDA $0000DC
+    STA ${THRESH:04X}
+    ; --- keep REFCUR sane (first-run garbage guard) ---
+    LDA ${REFCUR:04X}
+    CMP #${NSLOT:04X}
+    BCC g_refok
     LDA #$0000
-    STA ${SIDX:06X}
-g_col:
-    LDA ${SIDX:06X}
-    CMP #$0004
-    BCC g_left
-    CLC
-    ADC #$001C                  ; right strip cols +32..+35
-    BRA g_have
-g_left:
+    STA ${REFCUR:04X}
+g_refok:
+    ; --- deltas ---
+    LDA ${CAMCOL:04X}
     SEC
-    SBC #$0004                  ; left strip cols -4..-1
-g_have:
+    SBC ${PREVCOL:04X}
+    STA ${DCOL:04X}
+    LDA ${CAMROW:04X}
+    SEC
+    SBC ${PREVROW:04X}
+    STA ${DROW:04X}
+    ; --- decide full vs incremental ---
+    LDA ${INITDONE:04X}
+    CMP #$0001
+    BNE g_full
+    LDA ${DCOL:04X}
+    BPL g_dcp
+    EOR #$FFFF
+    INC
+g_dcp:
+    CMP #${FULLJMP:04X}
+    BCS g_full
+    LDA ${DROW:04X}
+    BPL g_drp
+    EOR #$FFFF
+    INC
+g_drp:
+    CMP #${FULLJMP:04X}
+    BCS g_full
+    BRA g_incr
+g_full:
+    LDA #$0001
+    STA ${FULLF:04X}
+    STA ${INITDONE:04X}
+    LDA #$0000
+    STA ${REFCUR:04X}
+    BRA g_iter
+g_incr:
+    LDA #$0000
+    STA ${FULLF:04X}
+    ; leading-column window from DCOL
+    LDA ${DCOL:04X}
+    BNE g_ld_nz
+    LDA #$7FFF                  ; DCOL==0: empty window
+    STA ${LEADLO:04X}
+    LDA #$8000
+    STA ${LEADHI:04X}
+    BRA g_iter
+g_ld_nz:
+    BMI g_ld_neg
+    CMP #${LEADCAP:04X}         ; right: LEADN = min(DCOL, LEADCAP)
+    BCC g_ld_pn
+    LDA #${LEADCAP:04X}
+g_ld_pn:
+    STA ${LEADN:04X}
+    LDA #${NSLOT:04X}           ; LEADLO = NSLOT - LEADN ; LEADHI = NSLOT-1
+    SEC
+    SBC ${LEADN:04X}
+    STA ${LEADLO:04X}
+    LDA #${NSLOT - 1:04X}
+    STA ${LEADHI:04X}
+    BRA g_iter
+g_ld_neg:
+    EOR #$FFFF                  ; |DCOL|
+    INC
+    CMP #${LEADCAP:04X}
+    BCC g_ld_nn
+    LDA #${LEADCAP:04X}
+g_ld_nn:
+    STA ${LEADN:04X}
+    LDA #$0000                  ; left: LEADLO = 0 ; LEADHI = LEADN-1
+    STA ${LEADLO:04X}
+    LDA ${LEADN:04X}
+    DEC
+    STA ${LEADHI:04X}
+g_iter:
+    LDA #$0000
+    STA ${SIDX:04X}
+g_each:
+    LDA ${FULLF:04X}
+    BNE g_do
+    LDA ${SIDX:04X}             ; leading? LEADLO <= SIDX <= LEADHI
+    CMP ${LEADLO:04X}
+    BCC g_trk
+    LDA ${LEADHI:04X}
+    CMP ${SIDX:04X}
+    BCS g_do
+g_trk:
+    LDA ${SIDX:04X}             ; trickle? (SIDX-REFCUR) mod NSLOT < TRICKLE
+    SEC
+    SBC ${REFCUR:04X}
+    BPL g_trk2
     CLC
-    ADC ${CAMCOL:06X}
-    STA ${MC:06X}
-    LDA ${MC:06X}
-    BMI g_skip                  ; off the left edge
-    ASL
-    CMP $B2                     ; row stride in bytes == map width * 2
-    BCC g_mc_ok
+    ADC #${NSLOT:04X}
+g_trk2:
+    CMP #${TRICKLE:04X}
+    BCC g_do
+    JMP g_skip
+g_do:
+    JSR g_slot
 g_skip:
-    LDA #$FFFF                  ; off the map edge -> mark slot skipped
-    PHA
-    LDA ${SIDX:06X}
-    ASL
-    TAX
-    PLA
-    STA ${VRAMDEST:06X},X
-    JMP g_next
-g_mc_ok:
-    STA ${MCX2:06X}
-    LDA ${SIDX:06X}
-    ASL
-    ASL
-    ASL
-    ASL
-    ASL
-    ASL
-    CLC
-    ADC #${COLBUF:04X}
-    STA ${BUFOFF:06X}
-    LDA ${CAMROW:06X}
-    STA ${WROW:06X}
-    LDY #$0020
-g_row:
-    LDA ${WROW:06X}
-    ASL
-    TAX
-    LDA $7E4328,X
-    CLC
-    ADC ${MCX2:06X}
-    TAX
-    LDA $7F0000,X
-    STA ${WCELL:06X}
-    AND #$01FF
-    CMP $DC
-    LDA ${WCELL:06X}
-    BCS g_no_pri
-    ORA #$2000
-g_no_pri:
-    PHA
-    LDA ${WROW:06X}
-    SEC
-    SBC ${CAMROW:06X}
-    CLC
-    ADC $1B7A                   ; BG1 tilemap row at camera top
-    AND #$001F
-    ASL
-    CLC
-    ADC ${BUFOFF:06X}
-    TAX
-    PLA
-    STA $7F0000,X
-    LDA ${WROW:06X}
+    LDA ${SIDX:04X}
     INC
-    STA ${WROW:06X}
-    DEY
-    BNE g_row
-    LDA ${MC:06X}
+    STA ${SIDX:04X}
+    CMP #${NSLOT:04X}
+    BCS g_after
+    JMP g_each
+g_after:
+    LDA ${FULLF:04X}
+    BNE g_noadv
+    LDA ${REFCUR:04X}           ; REFCUR = (REFCUR + TRICKLE) mod NSLOT
+    CLC
+    ADC #${TRICKLE:04X}
+    CMP #${NSLOT:04X}
+    BCC g_radv
     SEC
-    SBC ${CAMCOL:06X}
-    CLC
-    ADC $1B76                   ; BG1 tilemap col at camera left
-    AND #$003F
-    ASL
-    TAX
-    LDA $809D77,X
-    CLC
-    ADC $1B7E
-    PHA
-    LDA ${SIDX:06X}
-    ASL
-    TAX
-    PLA
-    STA ${VRAMDEST:06X},X
-g_next:
-    LDA ${SIDX:06X}
-    INC
-    STA ${SIDX:06X}
-    CMP #$0008
-    BCS g_exit
-    JMP g_col
+    SBC #${NSLOT:04X}
+g_radv:
+    STA ${REFCUR:04X}
+g_noadv:
+    LDA ${CAMCOL:04X}
+    STA ${PREVCOL:04X}
+    LDA ${CAMROW:04X}
+    STA ${PREVROW:04X}
 g_exit:
     REP #$30
     PLY
@@ -217,12 +280,113 @@ g_exit:
     PLP
     RTL
 
+; ---- gather one strip column (slot index in SIDX); DB=$7F ----
+g_slot:
+    LDA ${SIDX:04X}
+    CMP #${NSTRIP:04X}
+    BCC g_s_left
+    CLC
+    ADC #${32 - NSTRIP:04X}     ; right strip cols +32..
+    BRA g_s_have
+g_s_left:
+    SEC
+    SBC #${NSTRIP:04X}          ; left strip cols -NSTRIP..-1
+g_s_have:
+    CLC
+    ADC ${CAMCOL:04X}
+    STA ${MC:04X}
+    BMI g_s_skip                ; off the left edge
+    ASL
+    STA ${MCX2:04X}
+    CMP $0000B2                 ; row stride in bytes == map width * 2
+    BCC g_s_ok
+g_s_skip:
+    LDA ${SIDX:04X}
+    ASL
+    TAX
+    LDA #$FFFF
+    STA ${VRAMDEST:04X},X       ; mark slot skipped
+    RTS
+g_s_ok:
+    LDA ${SIDX:04X}             ; CSB = SIDX*64 (colbuf base for this slot)
+    ASL
+    ASL
+    ASL
+    ASL
+    ASL
+    ASL
+    STA ${CSB:04X}
+    CLC
+    ADC #$0040
+    STA ${WRAPAT:04X}           ; WRAPAT = CSB + 64
+    LDA ${RINGROW:04X}          ; Y = CSB + (RINGROW&31)*2  (ring write start)
+    AND #$001F
+    ASL
+    CLC
+    ADC ${CSB:04X}
+    TAY
+    LDA ${CAMROW:04X}           ; X = rowbase[CAMROW] + MC*2  (map source)
+    ASL
+    TAX
+    LDA $7E4328,X
+    CLC
+    ADC ${MCX2:04X}
+    TAX
+    TXA                         ; SRCEND = X + 32*$160
+    CLC
+    ADC #$2C00
+    STA ${SRCEND:04X}
+g_row:
+    LDA $0000,X                 ; map cell (DB=$7F -> $7F:X)
+    STA ${WCELL:04X}
+    AND #$01FF
+    CMP ${THRESH:04X}
+    LDA ${WCELL:04X}
+    BCS g_np
+    ORA #$2000                  ; priority bit
+g_np:
+    STA ${COLBUF:04X},Y         ; colbuf[CSB + ring offset]
+    INY
+    INY
+    CPY ${WRAPAT:04X}
+    BNE g_nw
+    TYA                         ; wrap ring write back to column start
+    SEC
+    SBC #$0040
+    TAY
+g_nw:
+    TXA                         ; advance map source by one row
+    CLC
+    ADC #$0160
+    TAX
+    CPX ${SRCEND:04X}
+    BNE g_row
+    ; VRAMDEST[slot] = bgbase + $80:9D77[((RINGCOL + off)&63)*2]
+    LDA ${MC:04X}
+    SEC
+    SBC ${CAMCOL:04X}
+    CLC
+    ADC ${RINGCOL:04X}
+    AND #$003F
+    ASL
+    TAX
+    LDA $809D77,X
+    CLC
+    ADC $001B7E
+    PHA
+    LDA ${SIDX:04X}
+    ASL
+    TAX
+    PLA
+    STA ${VRAMDEST:04X},X
+    RTS
+
 disp_stub:
     PHD
     LDA #$0000
     JML $80A943
 
-; ============ ENQUEUE (VRAM drain $80:9E7B) ============
+; ================= ENQUEUE (VRAM drain $80:9E7B); DB=0 =================
 enqueue_entry:
     PHP
     PHB
@@ -233,7 +397,7 @@ enqueue_entry:
     SEP #$20
     LDA #$00
     PHA
-    PLB
+    PLB                         ; DB = 0
     LDA $0E
     CMP #$02
     BNE e_bail
@@ -244,12 +408,12 @@ e_bail:
 e_run:
     REP #$20
     LDA #$0000
-    STA ${SIDX:06X}
+    STA ${SIDX_L:06X}
 e_loop:
-    LDA ${SIDX:06X}
+    LDA ${SIDX_L:06X}
     ASL
     TAX
-    LDA ${VRAMDEST:06X},X
+    LDA ${VD_L:06X},X
     CMP #$FFFF
     BEQ e_next
     PHA
@@ -259,7 +423,7 @@ e_loop:
     PLA
     BRA e_done
 e_room:
-    LDA ${SIDX:06X}
+    LDA ${SIDX_L:06X}
     ASL
     ASL
     ASL
@@ -280,11 +444,16 @@ e_room:
     INX
     INX
     STX $CE
+    LDA ${SIDX_L:06X}           ; consume: VRAMDEST[slot] = $FFFF
+    ASL
+    TAX
+    LDA #$FFFF
+    STA ${VD_L:06X},X
 e_next:
-    LDA ${SIDX:06X}
+    LDA ${SIDX_L:06X}
     INC
-    STA ${SIDX:06X}
-    CMP #$0008
+    STA ${SIDX_L:06X}
+    CMP #${NSLOT:04X}
     BCC e_loop
 e_done:
     LDA $26
@@ -308,8 +477,9 @@ e_drain_skip:
 
 def main() -> int:
     code, labels = asm.assemble(SOURCE, ORG)
-    if len(code) > 0x700:
-        raise SystemExit(f"routine too large: {len(code)} bytes > free space")
+    limit = 0x700  # spare region $8F:CC00..$8F:D2FF
+    if len(code) > limit:
+        raise SystemExit(f"routine too large: {len(code)} bytes > {limit} free")
 
     base = (ROOT / build.DEFAULT_ROM).read_bytes()
     rom = build.patch_rom(base)
@@ -341,8 +511,10 @@ def main() -> int:
     out_rom.write_bytes(rom)
     out_ips.write_bytes(ips)
 
-    print(f"routine bytes : {len(code)} (at $8F:CC00, {0x700 - len(code)} free)")
+    print(f"routine bytes : {len(code)} (at $8F:CC00, {limit - len(code)} free)")
+    print(f"strip columns : {NSTRIP}/side ({NSLOT} total); trickle {TRICKLE}/frame; colbuf ${COLBUF:04X}")
     print(f"gather_entry  : ${labels['gather_entry']:06X}")
+    print(f"g_slot        : ${labels['g_slot']:06X}")
     print(f"enqueue_entry : ${labels['enqueue_entry']:06X}")
     print(f"test ROM      : {out_rom}")
     print(f"widescreen IPS: {out_ips} ({len(ips)} bytes)")

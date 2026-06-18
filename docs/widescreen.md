@@ -1,10 +1,13 @@
 # Widescreen (optional feature) — plan & progress
 
-Status: **BG strip-fill ROM hook is stable in-game and data-correct in Mesen**
-(runs identical to stock DX, full scrolling, no crash/hang; `mesen_ws_verify.lua`
-passes with `failures=0`). Visual confirmation in bsnes-hd is still the next check.
-This doc captures the design, the reverse-engineering, the bugs fixed, and what's
-left.
+Status: **BG strip-fill ROM hook is stable and data-correct in Mesen**
+(`mesen_ws_verify.lua` passes with `failures=0` across all columns). Fills **10 strip
+columns per side** (≈80 px). The gather is now **incremental** — only the leading
+column(s) that scroll in, plus a small round-robin trickle — so per-frame cost is
+bounded and independent of strip width (this replaced an every-frame full refill that
+caused severe slowdown). Visual confirmation in bsnes-hd (coverage + smoothness) is the
+next check. This doc captures the design, the reverse-engineering, the bugs fixed, and
+what's left.
 
 ---
 
@@ -59,45 +62,64 @@ and is the long pole, so it's being built first.
 ## 4. How the ROM hook works
 
 bsnes-hd renders the strips; our hook keeps the BG1 tilemap's strip columns fresh.
-Every frame it reads the level map for the **4 columns just outside the 256 px window
-on each side**, builds them into scratch buffers, and feeds them to the game's own
-VRAM-DMA queue so they upload in vblank.
+It maintains **`NSTRIP`=10 columns just outside the 256 px window on each side** (20
+total) in VRAM, feeding the game's own VRAM-DMA queue so uploads land in vblank.
+
+### Incremental gather (the key to staying cheap)
+
+The camera moves ~**2 px/frame** (Mesen-measured), so a genuinely new tile column only
+appears every ~4 frames. A VRAM column, once written, **persists at its ring slot as
+the camera scrolls** (ring-buffer property), so re-filling all 20 columns every frame is
+almost entirely wasted work — and at 20 columns it overran the CPU budget (the cause of
+the severe slowdown). Instead, each frame the gather does only:
+- **leading:** if the camera crossed a tile boundary this frame (`|Δcol|≥1`), gather the
+  newly-exposed outermost column(s) on the leading side (capped at `LEADCAP`=3).
+- **trickle:** a round-robin of `TRICKLE`=8 columns, so the rest (and especially the
+  strips' top/bottom edges during **vertical** scroll, and columns after a direction
+  reversal) refresh within ~3 frames.
+- **full refill** only on the first gameplay frame or a ≥`FULLJMP`=4-tile jump
+  (level load / warp) — a one-frame cost that's invisible behind the transition.
+
+Per-frame work is therefore ~`leading + TRICKLE` columns (≈8–10), **independent of
+`NSTRIP`**, so the strips can be made wide without re-introducing slowdown. The heavy
+loop runs with **`DB=$7F`** (map/colbuf/scratch become cheap absolute accesses) and walks
+the map with a running **`+$160`** row pointer instead of a per-row table lookup (the
+row-base table is exactly `row*$160`).
 
 ### Two hooks
 
 | Hook | Site | Context | Job |
 |---|---|---|---|
-| **GATHER** | `$80:A93F` (scroll dispatcher entry, via trampoline) | active display, **gated once/frame** | Re-run the original dispatcher, then build the 8 strip columns into colbufs and record each column's VRAM destination. No queue. |
-| **ENQUEUE** | `$80:9E7B` (VRAM-queue drain entry, via trampoline) | vblank, cheap | Append the pre-gathered colbufs to the game's VRAM-DMA queue, set the dirty flag, then continue the original drain (which DMAs them and zeroes `$CE`). |
+| **GATHER** | `$80:A93F` (scroll dispatcher entry, via trampoline) | active display, **gated once/frame** | Re-run the original dispatcher, then gather the selected (leading + trickle) columns into colbufs and record each column's VRAM destination. No queue. |
+| **ENQUEUE** | `$80:9E7B` (VRAM-queue drain entry, via trampoline) | vblank, cheap | Append the just-gathered colbufs to the game's VRAM-DMA queue, **mark each consumed (`$FFFF`)** so it isn't re-uploaded, set the dirty flag, then continue the original drain (which DMAs them and zeroes `$CE`). |
 
-The split exists because the **gather is heavy** (8 cols × 32 rows) and must stay out
-of vblank, while VRAM uploads must happen **in** vblank. The dispatcher is called many
-times per frame (1 px camera step each) and is NMI-driven, so the gather is gated to
-run **once per frame** using the scheduler tick `$20`.
+The split exists because the gather must stay out of vblank while VRAM uploads must
+happen **in** vblank. The dispatcher is NMI-driven and called many times per frame
+(1 px camera step each), so the gather is gated to run **once per frame** via tick `$20`.
 
 ### Routine + memory layout
 
-Routine lives in free ROM at **`$8F:CC00`** (1792 free bytes). Scratch lives in free
-high WRAM (the level map ends ~`$7F:8F00`, so `$7F:F000+` is free; the DX mailbox at
-`$7F:FFF0` is already proven free):
+Routine lives in free ROM at **`$8F:CC00`** (1792 free bytes; ~748 used). Scratch lives
+in free high WRAM (the level map ends ~`$7F:8F00`, so `$7F:F000+` is free; the DX mailbox
+at `$7F:FFF0` is already proven free):
 
 ```
-$7F:FDC0-$FFBF   colbuf      8 columns × 64 bytes (32 tiles each)
-$7F:FFC0-$FFCF   scratch     CAMCOL CAMROW SIDX MC MCX2 BUFOFF WROW WCELL
-$7F:FFD0-$FFDF   VRAMDEST    8 words ($FFFF = column skipped at level edge)
-$7F:FFE0         LASTTICK    last scheduler tick we gathered on
+$7F:F000-$F4FF   colbuf      20 columns × 64 bytes (32 tiles each), ring-ordered
+$7F:F500-$F52F   scratch     cam/ring/thresh, slot state, deltas, lead window,
+                             PREVCOL PREVROW REFCUR INITDONE LASTTICK
+$7F:F540-$F567   VRAMDEST    20 words ($FFFF = skipped at edge / consumed by drain)
 $7F:FFF0-$FFF9   (DX analog mailbox)
 ```
 
-### Per-column pipeline
-For strip column offset `off` (`-4..-1` and `+32..+35`) and world-col
+### Per-column pipeline (for a gathered column)
+For strip column offset `off` (`-10..-1` and `+32..+41`) and world-col
 `mc = camera_col + off`:
-1. **gather:** for each of 32 rows, `cell = $7F:( rowbase[row] + mc*2 )` where
-   `rowbase = $7E:4328[row*2]`; apply priority `(cell & $1FF) < $DC → OR $2000`;
-   store to `colbuf[ ($1B7A + row_offset) & 31 ]` (the BG1 tilemap ring row).
+1. **gather:** walk 32 rows from `$7F:( camrow*$160 + mc*2 )` stepping `+$160`; apply
+   priority `(cell & $1FF) < $DC → OR $2000`; store ring-ordered into
+   `colbuf[ ($1B7A + row) & 31 ]`.
 2. **dest:** `VRAMDEST = $1B7E + $80:9D77[(($1B76 + off) & 63)*2]`.
 3. **enqueue (vblank):** queue entry `src=colbuf, bank=$7F, vram=VRAMDEST,
-   vmain=$0081 (vertical +32), size=$0040`.
+   vmain=$0081 (vertical +32), size=$0040`; then `VRAMDEST := $FFFF` (consumed).
 
 ---
 
@@ -145,9 +167,19 @@ The first builds crashed/hung. Diagnosed entirely with **Mesen headless tracing*
    tilemap col/row for the camera's top-left tile. → Destination columns and colbuf
    rows now use `$1B76 + strip_offset` and `$1B7A + row_offset`, while map reads still
    use the true world column/row.
+6. **Severe slowdown + a thin unfilled strip.** The first correct build refilled *all*
+   strip columns *every* frame. Widening to cover the screen (≈10 cols/side) pushed the
+   per-frame gather past the CPU budget → severe slowdown; a thin outer strip was still
+   unfilled. → Made the gather **incremental** (leading column + round-robin trickle;
+   full refill only on load/warp) so per-frame cost is bounded and independent of strip
+   width, and sped the inner loop (`DB=$7F` absolute, running `+$160` row pointer). The
+   enqueue now **consumes** each column (`VRAMDEST:=$FFFF`) so only freshly-gathered
+   columns re-upload. (See §4.) Camera speed was Mesen-measured at ~2 px/frame, which
+   sets the leading/trickle cadence.
 
-Result: the hook now runs **identically to stock DX** — verified over 1500+ frames of
-active scrolling in all directions, `$CE` returning to zero, no hang.
+Result: the hook runs **identically to stock DX** and is data-correct across all 20
+columns (`mesen_ws_verify.lua` `failures=0`), `$CE` returning to zero, no hang. Live
+smoothness is the remaining user check.
 
 ---
 
@@ -162,11 +194,17 @@ active scrolling in all directions, `$CE` returning to zero, no hang.
 | `tools/diagnostics/mesen_ws_trace.lua` | Stability/scroll trace (catches hangs, logs camera). |
 | `tools/diagnostics/mesen_ws_verify.lua` | Data-correctness check (colbuf ↔ map ↔ VRAM). |
 
-**Mesen headless** (the key debugging unlock):
+**Mesen headless** (the key debugging unlock) — this build is **MesenCE**, a GUI-
+subsystem app. Two gotchas that look like an instant no-op if you get them wrong:
+the testrunner takes **ROM first, then script**, and the shell must **wait** for it
+(`Start-Process`/`&` return immediately for a GUI app). Run it via `cmd` with stdout
+redirected so the shell blocks until `emu.stop()`:
 ```
-C:\Users\james\.codex\tmp\zamndx-research\Mesen_2.2.1\Mesen.exe --testRunner <script.lua> <rom.sfc>
+cmd /c '"...\Mesen_2.2.1\Mesen.exe" --testrunner "<rom.sfc>" "<script.lua>" > log.txt 2>&1'
 ```
-Scripts navigate menus to gameplay, read/trace memory, write a report, then `emu.stop()`.
+The process exit code is the script's `emu.stop()` arg (here 0 = pass, 1 = failures,
+2 = never reached gameplay). Scripts navigate menus to gameplay, read/trace memory,
+write a report, then `emu.stop()`.
 
 ---
 
@@ -186,11 +224,16 @@ anywhere). Walk around and watch the leading edges fill with correct terrain.
 
 ## 9. Remaining work
 
-- [x] **Data-correctness check** — `mesen_ws_verify.lua` passes (colbuf matches map,
-      VRAM matches colbuf).
-- [ ] **Visual confirmation in bsnes-hd** (user) — strips fill, alignment correct.
-- [ ] **Tuning** — strip column count vs. vblank budget; horizontal/vertical
-      alignment; behavior at level edges.
+- [x] **Data-correctness check** — `mesen_ws_verify.lua` passes for all 20 columns
+      (`failures=0`): after scrolling then holding still, colbuf and VRAM match the map.
+- [x] **Strip width** — `NSTRIP`=10 columns/side (≈80 px). Cost no longer scales with
+      width (incremental gather), so bump freely for ultrawide.
+- [x] **Slowdown** — fixed via incremental gather + faster inner loop (§4, §6 bug 6).
+- [ ] **Visual confirmation in bsnes-hd** (user) — (a) strips fill to the screen edge,
+      (b) no slowdown, (c) watch the strip **corners during vertical scroll** for any
+      brief stale band (trickle lag); if present, raise `TRICKLE` or add exact vertical
+      streaming.
+- [ ] **Tuning** — horizontal/vertical alignment; behavior at level edges.
 - [ ] **Sprites** — relax the OAM X-cull so active sprites draw in the strips
       (bsnes-hd already renders them; the game culls at the 256 edge). Display-only.
 - [ ] **BG2** — the 32×32 second layer may need its own pass if it shows strip garbage.

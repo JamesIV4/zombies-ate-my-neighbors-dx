@@ -1,8 +1,16 @@
--- Verify the widescreen pipeline produced correct data: after scrolling, each
--- gathered colbuf must match the level map, target the game's BG1 ring-buffer
--- column/row, and match VRAM after DMA.
+-- Verify the widescreen pipeline produces correct data. The gather is incremental
+-- (leading column + round-robin trickle), so we scroll to exercise it, then HOLD
+-- STILL for a while: with a static camera every strip column gets trickle-refreshed
+-- and uploaded within a few frames, so VRAM must then match the level map exactly.
+-- The enqueue consumes VRAMDEST (-> $FFFF) after upload, so we compute each column's
+-- VRAM destination here instead of reading it from scratch.
 local wram = emu.memType.snesWorkRam
 local vram = emu.memType.snesVideoRam
+-- Layout must match tools/build_widescreen.py (NSTRIP and the $7F scratch map).
+local N = 10
+local NSLOT = 2 * N
+local COLBUF = 0xF000
+local LASTTICK = 0xF52E
 local frame, gp = 0, nil
 local out = io.open("s:/Repos/zombies-ate-my-neighbors-dx/mesen-ws-verify.txt", "w")
 
@@ -40,8 +48,8 @@ local function col_addr(col)
 end
 
 local function slot_offset(sidx)
-	if sidx < 4 then return sidx - 4 end
-	return sidx + 28
+	if sidx < N then return sidx - N end
+	return sidx + (32 - N)
 end
 
 local function priority_cell(cell)
@@ -49,10 +57,17 @@ local function priority_cell(cell)
 	return cell
 end
 
+-- scroll for a while to exercise the incremental gather, then hold still so every
+-- column catches up before we snapshot.
 local function set_input()
 	if r8(0x000E) == 2 then
 		if not gp then gp = frame end
-		emu.setInput({ down = (frame % 60 < 30), right = (frame % 60 >= 30) }, 0)
+		local t = frame - gp
+		if t < 250 then
+			emu.setInput({ down = (t % 60 < 30), right = (t % 60 >= 30) }, 0)
+		else
+			emu.setInput({}, 0)          -- hold still: let trickle refresh all columns
+		end
 	else
 		local mp = frame % 90
 		emu.setInput({ start = frame >= 200 and mp < 10,
@@ -68,39 +83,25 @@ local function dump()
 	local ringrow = r16(0x1B7A)
 	local bgbase = r16(0x1B7E)
 	local rowstride = r16(0x00B2)
-	local failures = 0
+	local failures, checked = 0, 0
 
 	out:write(string.format(
 		"camcol=%d camrow=%d ringcol=%d ringrow=%d bgbase=%04X rowstride=%04X lasttick=%04X\n",
-		camcol, camrow, ringcol, ringrow, bgbase, rowstride, w7f16(0xFFE0)))
-	out:write("VRAMDEST[0..7]:")
-	for i = 0, 7 do out:write(string.format(" %04X", w7f16(0xFFD0 + i * 2))) end
-	out:write("\n")
+		camcol, camrow, ringcol, ringrow, bgbase, rowstride, w7f16(LASTTICK)))
 
-	for sidx = 0, 7 do
+	for sidx = 0, NSLOT - 1 do
 		local off = slot_offset(sidx)
 		local mc = camcol + off
-		local dest = w7f16(0xFFD0 + sidx * 2)
-		local bufoff = 0xFDC0 + sidx * 64
+		local bufoff = COLBUF + sidx * 64
 		local tilecol = (ringcol + off) % 64
-		local expected_dest = bgbase + col_addr(tilecol)
+		local dest = bgbase + col_addr(tilecol)
 		local skip = mc < 0 or (mc * 2) >= rowstride
 
-		out:write(string.format(
-			"\nslot %d off=%d mc=%d tilecol=%d colbuf=$%04X dest=$%04X expected=$%04X\n",
-			sidx, off, mc, tilecol, bufoff, dest, expected_dest))
+		out:write(string.format("slot %d off=%d mc=%d tilecol=%d colbuf=$%04X dest=$%04X%s\n",
+			sidx, off, mc, tilecol, bufoff, dest, skip and "  (off-map, skipped)" or ""))
 
-		if skip then
-			if dest ~= 0xFFFF then
-				failures = failures + 1
-				out:write("  FAIL: edge slot was not skipped\n")
-			end
-		else
-			if dest ~= expected_dest then
-				failures = failures + 1
-				out:write("  FAIL: wrong VRAM destination\n")
-			end
-
+		if not skip then
+			checked = checked + 1
 			for r = 0, 31 do
 				local worldrow = camrow + r
 				local tilerow = (ringrow + r) % 32
@@ -118,14 +119,14 @@ local function dump()
 			end
 		end
 	end
-	out:write(string.format("\nfailures=%d\n", failures))
+	out:write(string.format("\ncolumns_checked=%d failures=%d\n", checked, failures))
 	out:flush()
 	if failures == 0 then out:close() emu.stop(0) else out:close() emu.stop(1) end
 end
 
 local function end_frame()
 	frame = frame + 1
-	if gp and (frame - gp) >= 400 then dump()
+	if gp and (frame - gp) >= 390 then dump()      -- ~140 still frames after scrolling
 	elseif frame > 8000 then out:write("no gameplay\n") out:close() emu.stop(2) end
 end
 
