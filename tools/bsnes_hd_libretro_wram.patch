@@ -126,3 +126,46 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
        if(--mosaicCounter == 0) {
          uint color, shift = mirrorX ? tileX : 7 - tileX;
        /*if(self.tileMode >= TileMode::BPP2)*/ {
+diff --git a/bsnes/sfc/ppu-fast/line.cpp b/bsnes/sfc/ppu-fast/line.cpp
+--- a/bsnes/sfc/ppu-fast/line.cpp
++++ b/bsnes/sfc/ppu-fast/line.cpp
+@@ -337,6 +337,19 @@ auto PPU::Line::render(bool fieldID) -> void {
+       } 
+     }
+ 
++    // ZAMN-DX widescreen: the in-level radar inset's darkened underlay is a color-math
++    // window (window 1, positioned per scanline by HDMA). bsnes-hd centers it in the
++    // 4:3 region (the +ws above), but the gameplay HUD/border is anchored to the left
++    // edge, so the underlay must be too. On the radar's own scanlines (window 1 is a
++    // real sub-screen box) during gameplay, drop the +ws so the underlay left-anchors
++    // with the HUD and the separately shifted neighbor dot.
++    if(io.bgMode == 1 && cpu.wram[0x000e] == 0x02 && cpu.wram[0x0d25] != 0
++       && io.window.oneLeft > 0 && io.window.oneRight > io.window.oneLeft
++       && io.window.oneRight < 255) {
++      oneLeft  -= ws;
++      oneRight -= ws;
++    }
++
+     renderWindow(io.col.window, io.col.window.aboveMask, windowAbove,
+                 oneLeft, oneRight, twoLeft, twoRight, scale,
+                 (256 + 2 * ppu.widescreen())*scale*offset, ppu.widescreen());
+diff --git a/bsnes/sfc/ppu-fast/object.cpp b/bsnes/sfc/ppu-fast/object.cpp
+--- a/bsnes/sfc/ppu-fast/object.cpp
++++ b/bsnes/sfc/ppu-fast/object.cpp
+@@ -50,6 +50,16 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+     const auto& object = ppu.objects[item.index];
+     uint tileWidth = item.width >> 3;
+     int x = object.x;
++    // ZAMN-DX widescreen: the in-level radar inset is drawn at fixed 256px screen
++    // coordinates, so in widescreen it stays centered while the BG3 HUD/border is
++    // anchored to the left edge. The flickering neighbor dot is the top-priority
++    // (priority 3) sprite the game parks inside the radar box (screen ~x[22,72],
++    // y[48,106]); shift it left by the strip width so it tracks the underlay+HUD.
++    if(io.bgMode == 1 && cpu.wram[0x000e] == 0x02 && cpu.wram[0x0d25] != 0
++       && object.priority == 3
++       && object.x >= 16 && object.x < 76 && object.y >= 44 && object.y < 110) {
++      x -= (int)ppufast.widescreen();
++    }
+     int y = this->y - object.y & 0xff;
+     if(self.interlace) y <<= 1;
+ 
