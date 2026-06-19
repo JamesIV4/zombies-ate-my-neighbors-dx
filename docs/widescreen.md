@@ -107,6 +107,34 @@ emulated SNES CPU headroom in sprite-heavy widescreen scenes, and Fast Math remo
 the multiply/divide delays. Update the tracked DLL deliberately with
 `tools/build_bsnes_hd_core.py` if that calibration changes.
 
+### Gameplay HUD and radar (currently DISABLED)
+
+Beyond the startup/menu guards above, the renderer also repositions the **in-level UI**
+so it tracks the wider view instead of floating centered in the 4:3 middle. **All three
+pieces below are presently commented out** in `tools/bsnes_hd_libretro_wram.patch`
+(search `TEMP DISABLED`): the radar-dot sprite shift was also moving some priority-3
+weapon sprites, so the whole anchor was disabled pending that fix. Re-enable the three
+sites together.
+
+- **HUD left-anchor** (`sfc/ppu-fast/background.cpp`): when the gameplay HUD layer is
+  live, BG3 (`$6400/$4000`) is forced wide and its tilemap sampling is shifted left by
+  the strip width, so the 256 px status bar anchors to the left screen edge. Detected
+  with `$0E == 2` (in a level) **and the live map row-stride `$B2 != 0`** (map loaded).
+  `$B2` is used instead of the player-active flag `$0D25` because `$0D25` briefly drops
+  to 0 during transient animations such as the **pool dive**, which made the HUD snap
+  back to centered for a few frames; `$B2` stays set throughout a loaded level and is 0
+  only on the between-level/password/load screens.
+- **Radar underlay** (`sfc/ppu-fast/line.cpp`): the radar inset's darkened backing is a
+  color-math window (window 1, positioned per scanline by HDMA writing `$2126/$2127`).
+  bsnes-hd centers it (`+ws`); on the radar's own scanlines during gameplay the `+ws`
+  is dropped so the underlay left-anchors with the HUD.
+- **Radar dot** (`sfc/ppu-fast/object.cpp`): the flickering neighbor dot is the
+  top-priority (priority 3) sprite the game parks inside the radar box
+  (screen ~`x[22,72] y[48,106]`, cycling one victim per ~2 frames); it is shifted left
+  by the strip width to track the underlay. **This box-rect + priority-3 test is the
+  weak point** — it also caught some weapon sprites, hence the disable; it needs a
+  tighter discriminator before re-enabling.
+
 ---
 
 ## 4. How the ROM hook works
@@ -441,6 +469,7 @@ screens are left untouched.
 | `tools/diagnostics/re65816.py` | 65816 **disassembler** + PPU/DMA register-write **scanner**. `dis bb:aaaa N`, `scan`, `--rom`. |
 | `tools/build_widescreen.py` | Assembles the hook, applies both trampolines + the routine to the DX ROM, fixes checksum, emits `mod/widescreen.ips` and a ready test ROM. |
 | `tools/build_bsnes_hd_core.py` | Patches a bsnes-hd libretro DLL's core-option defaults to produce the repo-owned ZAMN-DX core DLL. The source DLL must already include `tools/bsnes_hd_libretro_wram.patch`; release builds do not download or regenerate this automatically. |
+| `tools/build_bsnes_hd.ps1` | One-step core rebuild (Windows + MinGW-w64): ensures `bsnes_hd_libretro_wram.patch` is applied to the source tree, compiles the libretro target (`mingw32-make -C bsnes target=libretro`), bakes the option defaults via `build_bsnes_hd_core.py`, and deploys the DLL into any staged `dist/release/*` test runtime. |
 | `tools/diagnostics/mesen_wram_probe.lua` | Dumps live WRAM (found map extent + free scratch). |
 | `tools/diagnostics/mesen_ws_trace.lua` | Stability/scroll trace (catches hangs, logs camera). |
 | `tools/diagnostics/mesen_ws_verify.lua` | BG data-correctness check (colbuf ↔ map ↔ VRAM). |
@@ -470,6 +499,10 @@ screens are left untouched.
 | `tools/diagnostics/mesen_savestate_a13e_callers.lua` | Identifies which bank-`$83` initializer callers create the saved-scene child objects. |
 | `tools/diagnostics/mesen_savestate_victim_trace.lua` | Dumps victim-task scheduler/DP state for the left-strip neighbor save. |
 | `tools/diagnostics/mesen_savestate_victim_gate_verify.lua` | Diagnostic-only RAM reset proving the widened victim scanner wakes the saved-scene cheerleader in the strip. |
+| `tools/diagnostics/mesen_radar_probe.lua` | Dumps full PPU state + OAM for a save slot (`ZAMNDX_SLOT`); identified the radar inset as a color-math window (underlay) plus a cycling priority-3 sprite (dot). |
+| `tools/diagnostics/mesen_radar_shot.lua` | Saves a 4:3 PNG screenshot of a save slot — visual grounding for the radar/HUD work. |
+| `tools/diagnostics/mesen_pool_hud_probe.lua` | Per-frame HUD-guard trace across the pool-dive transition; showed `$0D25` dropping to 0 for ~5 frames while the map stride `$B2` stays set. |
+| `tools/diagnostics/mesen_hud_survey.lua` | One-shot HUD-state survey of a slot (`$0E`/`$0D25`/`$B2`/BG bases/BG3 rows) to tell the pool dive apart from a level-load. |
 
 **MesenCE Lua API (for the above):** memory/exec callbacks via
 `emu.addMemoryCallback(fn, emu.callbackType.{read,write,exec}, start, end, emu.cpuType.snes, emu.memType.X)`
@@ -506,6 +539,17 @@ launches the patched ROM in BizHawk through the bundled bsnes-hd libretro core.
 For standalone visual checks, use bsnes-hd with `WideScreen Mode = all scenes`
 and render sprites anywhere.
 
+To rebuild the **bundled bsnes-hd core** after editing
+`tools/bsnes_hd_libretro_wram.patch` or the source tree (`.tools/bsnes-hd-src`), run the
+one-step script (needs a MinGW-w64 toolchain — `mingw32-make` + `g++`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/build_bsnes_hd.ps1
+```
+
+It compiles the libretro target, bakes the ZAMN-DX option defaults, writes
+`mod/bsnes_hd_beta_zamndx_libretro.dll`, and deploys it into any staged test runtime.
+
 ---
 
 ## 9. Remaining work
@@ -539,6 +583,12 @@ and render sprites anywhere.
       edges and confirm the camera clamp looks clean in standalone bsnes-hd.
 - [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment.
 - [ ] **BG2** — the 32×32 second layer may need its own pass if it shows strip garbage.
+- [ ] **Gameplay HUD / radar anchoring (DISABLED)** — the BG3 HUD left-anchor and the
+      radar underlay/dot shifts are committed but **commented out** (`TEMP DISABLED`, §3):
+      the radar dot's priority-3 box-rect shift also moved some weapon sprites. Narrow the
+      sprite discriminator (e.g. require the dot's tile/palette signature or its single OAM
+      slot) and re-enable the three sites together. The pool-dive guard fix (`$B2` map-loaded
+      instead of `$0D25` player-active) is part of the same disabled block.
 - [x] **Hosting** - launcher starts BizHawk through OpenAdvanced libretro when the
       Widescreen patch is enabled, using the repo-owned patched bsnes-hd DLL.
 - [x] **Launcher integration** - Widescreen is a default-on optional ROM patch and

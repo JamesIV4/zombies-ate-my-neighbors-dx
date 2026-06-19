@@ -35,7 +35,7 @@ diff --git a/bsnes/target-libretro/program.cpp b/bsnes/target-libretro/program.c
 diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.cpp
 --- a/bsnes/sfc/ppu-fast/background.cpp
 +++ b/bsnes/sfc/ppu-fast/background.cpp
-@@ -4,6 +4,58 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+@@ -4,6 +4,62 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
    if(self.tileMode == TileMode::Inactive) return;
  
    uint wsConf = ppufast.wsbg(source);
@@ -45,14 +45,18 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
 +    // ZAMN-DX widescreen: startup UI scenes reuse BG layers differently than gameplay.
 +    // Key off live VRAM bases/contents so gameplay keeps the normal bundled defaults.
 +    if(source == Source::BG3 && self.screenAddress == 0x6400 && self.tiledataAddress == 0x4000) {
++      // TEMP DISABLED (ZAMN HUD anchor causes some weapons to render wrong -
++      // investigate later): leaving zamnGameplayHud = false renders the gameplay HUD
++      // 4:3-centered (wsbg3 "off" = 0), as before the anchor fix. Re-enable by
++      // uncommenting the guard assignment below.
 +      // $0E==2 is "in a level"; the live map row-stride $B2 is non-zero only once
 +      // the level map is loaded and running (it is 0 on the between-level/password
 +      // screens and the pre-gameplay load). Keying on the loaded map instead of
 +      // $0D25 (player-active) keeps the HUD left-anchored through transient
 +      // player-inactive animations like the pool dive, where $0D25 briefly drops to
 +      // 0 and used to snap the HUD back to centered for a few frames.
-+      zamnGameplayHud = cpu.wram[0x000e] == 0x02
-+                     && (cpu.wram[0x00b2] | cpu.wram[0x00b3]);
++      // zamnGameplayHud = cpu.wram[0x000e] == 0x02
++      //                && (cpu.wram[0x00b2] | cpu.wram[0x00b3]);
 +      if(zamnGameplayHud) wsConf = 1;                 // gameplay HUD: anchor 256px layer to the left edge
 +      else {
 +        uint16 firstCell = ppu.vram[ppu.vramExt(self.screenAddress)];
@@ -94,7 +98,7 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
    if(wsConf == 14) {
      return;
    }
-@@ -54,6 +106,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+@@ -54,6 +110,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
    uint vscroll = self.voffset;
    uint hmask = (width << self.tileSize << !!(self.screenSize & 1)) - 1;
    uint vmask = (width << self.tileSize << !!(self.screenSize & 2)) - 1;
@@ -102,7 +106,7 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
  
    uint y = this->y;
    if(self.mosaicEnable) y -= io.mosaic.size - io.mosaic.counter;
-@@ -74,7 +127,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+@@ -74,7 +131,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
    bool lastCropped = false;
    int x = 0 - (hscroll & 7) - ws;
    while(x < (width + ws)) {
@@ -111,7 +115,7 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
      uint voffset = y + vscroll;
      if(offsetPerTileMode) {
        uint validBit = 0x2000 << source;
-@@ -104,6 +157,9 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+@@ -104,6 +161,9 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
      voffset &= vmask;
  
      uint tileNumber = getTile(self, hoffset, voffset);
@@ -121,7 +125,7 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
      uint mirrorY = tileNumber & 0x8000 ? 7 : 0;
      uint mirrorX = tileNumber & 0x4000 ? 7 : 0;
      uint8 tilePriority = self.priority[bool(tileNumber & 0x2000)];
-@@ -125,6 +181,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+@@ -125,6 +185,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
  
      for(uint tileX = 0; tileX < 8; tileX++, x++) {
        if(x < -ws || x >= width + ws) continue;   //if(x & width) continue;  //x < 0 || x >= width
@@ -132,22 +136,25 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
 diff --git a/bsnes/sfc/ppu-fast/line.cpp b/bsnes/sfc/ppu-fast/line.cpp
 --- a/bsnes/sfc/ppu-fast/line.cpp
 +++ b/bsnes/sfc/ppu-fast/line.cpp
-@@ -337,6 +337,19 @@ auto PPU::Line::render(bool fieldID) -> void {
+@@ -337,6 +337,22 @@ auto PPU::Line::render(bool fieldID) -> void {
        } 
      }
  
++    // TEMP DISABLED (ZAMN HUD anchor off - investigate weapon issue later): radar
++    // underlay shift. With the HUD no longer left-anchored, the underlay stays centered
++    // too; re-enable together with the background.cpp HUD anchor.
 +    // ZAMN-DX widescreen: the in-level radar inset's darkened underlay is a color-math
 +    // window (window 1, positioned per scanline by HDMA). bsnes-hd centers it in the
 +    // 4:3 region (the +ws above), but the gameplay HUD/border is anchored to the left
 +    // edge, so the underlay must be too. On the radar's own scanlines (window 1 is a
 +    // real sub-screen box) during gameplay, drop the +ws so the underlay left-anchors
 +    // with the HUD and the separately shifted neighbor dot.
-+    if(io.bgMode == 1 && cpu.wram[0x000e] == 0x02 && (cpu.wram[0x00b2] | cpu.wram[0x00b3])
-+       && io.window.oneLeft > 0 && io.window.oneRight > io.window.oneLeft
-+       && io.window.oneRight < 255) {
-+      oneLeft  -= ws;
-+      oneRight -= ws;
-+    }
++    // if(io.bgMode == 1 && cpu.wram[0x000e] == 0x02 && (cpu.wram[0x00b2] | cpu.wram[0x00b3])
++    //    && io.window.oneLeft > 0 && io.window.oneRight > io.window.oneLeft
++    //    && io.window.oneRight < 255) {
++    //   oneLeft  -= ws;
++    //   oneRight -= ws;
++    // }
 +
      renderWindow(io.col.window, io.col.window.aboveMask, windowAbove,
                  oneLeft, oneRight, twoLeft, twoRight, scale,
@@ -155,20 +162,23 @@ diff --git a/bsnes/sfc/ppu-fast/line.cpp b/bsnes/sfc/ppu-fast/line.cpp
 diff --git a/bsnes/sfc/ppu-fast/object.cpp b/bsnes/sfc/ppu-fast/object.cpp
 --- a/bsnes/sfc/ppu-fast/object.cpp
 +++ b/bsnes/sfc/ppu-fast/object.cpp
-@@ -50,6 +50,16 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
+@@ -50,6 +50,19 @@ auto PPU::Line::renderObject(PPU::IO::Object& self) -> void {
      const auto& object = ppu.objects[item.index];
      uint tileWidth = item.width >> 3;
      int x = object.x;
++    // TEMP DISABLED (ZAMN HUD anchor off - this shifted some priority-3 sprites and
++    // may be the weapon issue; investigate later): radar dot shift. Re-enable together
++    // with the background.cpp HUD anchor.
 +    // ZAMN-DX widescreen: the in-level radar inset is drawn at fixed 256px screen
 +    // coordinates, so in widescreen it stays centered while the BG3 HUD/border is
 +    // anchored to the left edge. The flickering neighbor dot is the top-priority
 +    // (priority 3) sprite the game parks inside the radar box (screen ~x[22,72],
 +    // y[48,106]); shift it left by the strip width so it tracks the underlay+HUD.
-+    if(io.bgMode == 1 && cpu.wram[0x000e] == 0x02 && (cpu.wram[0x00b2] | cpu.wram[0x00b3])
-+       && object.priority == 3
-+       && object.x >= 16 && object.x < 76 && object.y >= 44 && object.y < 110) {
-+      x -= (int)ppufast.widescreen();
-+    }
++    // if(io.bgMode == 1 && cpu.wram[0x000e] == 0x02 && (cpu.wram[0x00b2] | cpu.wram[0x00b3])
++    //    && object.priority == 3
++    //    && object.x >= 16 && object.x < 76 && object.y >= 44 && object.y < 110) {
++    //   x -= (int)ppufast.widescreen();
++    // }
      int y = this->y - object.y & 0xff;
      if(self.interlace) y <<= 1;
  
