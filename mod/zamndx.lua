@@ -90,12 +90,21 @@ end
 
 local function release_overrides()
 	pcall(function()
-		joypad.set({}, PLAYER)
+		joypad.set({})
 		mainmemory.write_u16_le(AIM_ACTIVE_ADDRESS, 0)
 		mainmemory.write_u16_le(MOVEMENT_ACTIVE_ADDRESS, 0)
 		write_signed16(MOVEMENT_X_ADDRESS, 0)
 		write_signed16(MOVEMENT_Y_ADDRESS, 0)
 	end)
+end
+
+local function apply_overrides(overrides)
+	local mapped = {}
+	for name, state in pairs(overrides) do
+		mapped["P" .. PLAYER .. " " .. name] = state
+		mapped["P" .. PLAYER .. " RetroPad " .. name] = state
+	end
+	joypad.set(mapped)
 end
 
 local function read_axis(name, axes)
@@ -259,6 +268,6 @@ while true do
 		movement_active and MOVEMENT_SIGNATURE or 0)
 	write_signed16(MOVEMENT_X_ADDRESS, movement_x)
 	write_signed16(MOVEMENT_Y_ADDRESS, movement_y)
-	joypad.set(overrides, PLAYER)
+	apply_overrides(overrides)
 	emu.frameadvance()
 end

@@ -10,6 +10,8 @@ This emulator-only mod for the USA SNES release adds:
 
 It also bundles optional ROM patches you can mix in from the
 launcher's `Configure ROM Patches` screen: 
+- **Widescreen**: extends the playfield when launched through the bundled
+  ZAMN-DX bsnes-hd libretro core
 - **Bloody Disgusting Edition**
 ([hack #4306](https://www.romhacking.net/hacks/4306/)): restores the
 censored red blood on the Game Over screen
@@ -58,7 +60,8 @@ The release never downloads or distributes the game ROM itself.
 
 The release ZIP includes the self-contained launcher, .NET runtime, BizHawk
 2.11.1, the app-local Microsoft Visual C++ runtime, the DX IPS patch, the
-optional ROM patches, and the Lua controller runtime. Players do not need to install an emulator, .NET,
+optional ROM patches, the repo-owned ZAMN-DX bsnes-hd libretro core, and the Lua
+controller runtime. Players do not need to install an emulator, .NET,
 PowerShell, Python, the Visual C++ Redistributable, or any other dependency.
 
 The expected source ROM SHA-256 is:
@@ -156,6 +159,7 @@ selection is applied the next time you press `Play Game`.
 
 | Patch                     | Default | Description                                                                                                                                                                                                                                  |
 | ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Widescreen                | On      | Extends the playfield horizontally through the bundled ZAMN-DX bsnes-hd libretro core. The ROM hook streams side-strip terrain, relaxes display culls, and clamps/black-fills level edges for the wider view. |
 | Bloody Disgusting Edition | On      | Restores censored red blood on the Game Over screen ([romhacking.net hack #4306](https://www.romhacking.net/hacks/4306/)). Edits only the blood-drip sprite tiles, so the purple transformation monster and other graphics stay untouched. |
 | Reverse Inventory Cycling | On      | Cycle weapons and items in both directions ([romhacking.net hack #4318](https://www.romhacking.net/hacks/4318/)). Enables the reworked control scheme below (configurable).                                                                               |
 | Battery Save              | On      | Saves level/ammo/item progress to SRAM after every level ([romhacking.net hack #7312](https://www.romhacking.net/hacks/7312/)). Load from the password screen with Start. Start a new game first - loading with no save shows a black screen. |
@@ -195,8 +199,8 @@ With Battery Save enabled the launcher also configures BizHawk to flush SaveRAM
 periodically, so end-of-level saves are written to the `.srm` file even on an
 unclean exit. Start a new game before trying to load.
 
-Bundled optional patches are third-party hacks redistributed for convenience;
-see `mod\bloody-disgusting.txt` for the source and attribution.
+Some bundled optional patches are third-party hacks redistributed for convenience;
+see the matching `mod\*.txt` and license files for source and attribution.
 
 To assign an input, click `Capture`, release all controls, then press the
 desired button or move the desired stick axis. Capture is performed directly
@@ -245,6 +249,9 @@ sub-direction projectile trajectories would require replacing every weapon's
 movement logic. The controller mailbox uses `$7F:FFF0-$7F:FFF9`, well above
 the original game's low-WRAM working area.
 
-Mesen is useful for tracing and deterministic verification of the ROM patch,
-but BizHawk is the runtime target because its Lua API exposes raw host
-controller axes and frame-by-frame SNES input overrides.
+Mesen is useful for tracing and deterministic verification of the ROM patch.
+BizHawk is the runtime target because its Lua API exposes raw host controller
+axes and frame-by-frame SNES input overrides. When Widescreen is enabled, the
+launcher opens the patched ROM through the bundled ZAMN-DX bsnes-hd libretro
+core so BizHawk can provide both widescreen rendering and the DX controller
+runtime in the same process.

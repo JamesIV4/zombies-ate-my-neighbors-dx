@@ -28,9 +28,13 @@ $StageDirectory = Join-Path $Root "dist\release\ZAMN-DX-Windows-x64"
 $ZipPath = Join-Path $Root "dist\ZAMN-DX-Windows-x64-v$Version.zip"
 $ZipChecksumPath = "$ZipPath.sha256"
 $RomBuildScript = Join-Path $Root "tools\build.py"
+$WidescreenBuildScript = Join-Path $Root "tools\build_widescreen.py"
 $SourceRom = Join-Path $Root "Zombies Ate My Neighbors (USA).sfc"
 $PatchedRom = Join-Path $Root "dist\Zombies Ate My Neighbors DX.sfc"
 $IpsPatch = Join-Path $Root "dist\zamndx.ips"
+$WidescreenPatch = Join-Path $Root "mod\widescreen.ips"
+$BundledBsnesHdCore = Join-Path $Root "mod\bsnes_hd_beta_zamndx_libretro.dll"
+$BsnesHdLicense = Join-Path $Root "mod\bsnes-hd-LICENSE.txt"
 
 [System.IO.Directory]::CreateDirectory($ToolsDirectory) | Out-Null
 [System.IO.Directory]::CreateDirectory($DownloadsDirectory) | Out-Null
@@ -41,6 +45,18 @@ The source ROM is required to rebuild the IPS patch:
 
   $SourceRom
 "@
+}
+if (-not (Test-Path -LiteralPath $BundledBsnesHdCore)) {
+    throw @"
+The repo-owned ZAMN-DX bsnes-hd libretro core is required:
+
+  $BundledBsnesHdCore
+
+Use tools\build_bsnes_hd_core.py deliberately when updating this binary.
+"@
+}
+if (-not (Test-Path -LiteralPath $BsnesHdLicense)) {
+    throw "The bsnes-hd license file is missing: $BsnesHdLicense"
 }
 
 $python = Get-Command python -ErrorAction SilentlyContinue
@@ -57,6 +73,12 @@ if ($LASTEXITCODE -ne 0) {
     throw "The ROM patch build failed."
 }
 $PatchedRomHash = (Get-FileHash -LiteralPath $PatchedRom -Algorithm SHA256).Hash
+
+Write-Host "Rebuilding widescreen optional patch..."
+& $python.Source $WidescreenBuildScript
+if ($LASTEXITCODE -ne 0) {
+    throw "The widescreen patch build failed."
+}
 
 if (-not (Test-Path -LiteralPath $Dotnet)) {
     if ($SkipDownload) {
@@ -127,6 +149,7 @@ Copy-Item -LiteralPath (Join-Path $Root "mod\reverse-inventory-cycling.ips") -De
 Copy-Item -LiteralPath (Join-Path $Root "mod\reverse-inventory-cycling.txt") -Destination (Join-Path $StageDirectory "mod\reverse-inventory-cycling.txt")
 Copy-Item -LiteralPath (Join-Path $Root "mod\snes-sram-save.ips") -Destination (Join-Path $StageDirectory "mod\snes-sram-save.ips")
 Copy-Item -LiteralPath (Join-Path $Root "mod\snes-sram-save.txt") -Destination (Join-Path $StageDirectory "mod\snes-sram-save.txt")
+Copy-Item -LiteralPath $WidescreenPatch -Destination (Join-Path $StageDirectory "mod\widescreen.ips")
 Copy-Item -LiteralPath (Join-Path $Root "README.md") -Destination (Join-Path $StageDirectory "README.md")
 
 $stagedLauncher = Join-Path $StageDirectory "ZAMN-DX.exe"
@@ -197,6 +220,10 @@ if (-not [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)) {
 }
 
 Expand-Archive -LiteralPath $BizHawkZip -DestinationPath (Join-Path $StageDirectory "runtime\BizHawk") -Force
+$bizHawkDirectory = Join-Path $StageDirectory "runtime\BizHawk"
+$bsnesHdCoreDirectory = Join-Path $bizHawkDirectory "Libretro\Cores"
+[System.IO.Directory]::CreateDirectory($bsnesHdCoreDirectory) | Out-Null
+Copy-Item -LiteralPath $BundledBsnesHdCore -Destination (Join-Path $bsnesHdCoreDirectory "bsnes_hd_beta_zamndx_libretro.dll") -Force
 
 if ([string]::IsNullOrWhiteSpace($VcRuntimeDirectory)) {
     $vcCandidates = @()
@@ -224,11 +251,11 @@ Install Visual Studio Build Tools with the C++ workload, or pass:
 "@
 }
 
-$bizHawkDirectory = Join-Path $StageDirectory "runtime\BizHawk"
 Copy-Item -Path (Join-Path $VcRuntimeDirectory "*.dll") -Destination $bizHawkDirectory -Force
 
 $bizHawkLicenseUri = "https://raw.githubusercontent.com/TASEmulators/BizHawk/$BizHawkVersion/LICENSE"
 Invoke-WebRequest $bizHawkLicenseUri -OutFile (Join-Path $StageDirectory "licenses\BizHawk-LICENSE.txt")
+Copy-Item -LiteralPath $BsnesHdLicense -Destination (Join-Path $StageDirectory "licenses\bsnes-hd-LICENSE.txt")
 
 foreach ($name in @("LICENSE.txt", "ThirdPartyNotices.txt")) {
     $source = Join-Path $DotnetDirectory $name
@@ -293,6 +320,11 @@ $manifest = [ordered]@{
     lua_sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\zamndx.lua") -Algorithm SHA256).Hash
     optional_patches = @(
         [ordered]@{
+            id = "widescreen"
+            file = "mod/widescreen.ips"
+            sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\widescreen.ips") -Algorithm SHA256).Hash
+        }
+        [ordered]@{
             id = "bloody"
             file = "mod/bloody-disgusting.ips"
             sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\bloody-disgusting.ips") -Algorithm SHA256).Hash
@@ -308,6 +340,18 @@ $manifest = [ordered]@{
             sha256 = (Get-FileHash -LiteralPath (Join-Path $StageDirectory "mod\snes-sram-save.ips") -Algorithm SHA256).Hash
         }
     )
+    bsnes_hd_libretro_core = [ordered]@{
+        file = "runtime/BizHawk/Libretro/Cores/bsnes_hd_beta_zamndx_libretro.dll"
+        sha256 = (Get-FileHash -LiteralPath (Join-Path $bsnesHdCoreDirectory "bsnes_hd_beta_zamndx_libretro.dll") -Algorithm SHA256).Hash
+        options = [ordered]@{
+            bsnes_mode7_wsMode = "all"
+            bsnes_mode7_wsbg1 = "off"
+            bsnes_mode7_wsbg2 = "on"
+            bsnes_mode7_wsbg3 = "off"
+            bsnes_mode7_wsbg4 = "on"
+            bsnes_mode7_wsobj = "unsafe"
+        }
+    }
     bizhawk_version = $BizHawkVersion
     bizhawk_archive_sha256 = (Get-FileHash -LiteralPath $BizHawkZip -Algorithm SHA256).Hash
     bizhawk_download = "https://github.com/TASEmulators/BizHawk/releases/download/$BizHawkVersion/BizHawk-$BizHawkVersion-win-x64.zip"
@@ -333,9 +377,11 @@ $checksums = @(
     "$($manifest.launcher_sha256)  ZAMN-DX.exe"
     "$($manifest.patch_sha256)  mod/zamndx.ips"
     "$($manifest.lua_sha256)  mod/zamndx.lua"
-    "$($manifest.optional_patches[0].sha256)  mod/bloody-disgusting.ips"
-    "$($manifest.optional_patches[1].sha256)  mod/reverse-inventory-cycling.ips"
-    "$($manifest.optional_patches[2].sha256)  mod/snes-sram-save.ips"
+    "$($manifest.optional_patches[0].sha256)  mod/widescreen.ips"
+    "$($manifest.optional_patches[1].sha256)  mod/bloody-disgusting.ips"
+    "$($manifest.optional_patches[2].sha256)  mod/reverse-inventory-cycling.ips"
+    "$($manifest.optional_patches[3].sha256)  mod/snes-sram-save.ips"
+    "$($manifest.bsnes_hd_libretro_core.sha256)  runtime/BizHawk/Libretro/Cores/bsnes_hd_beta_zamndx_libretro.dll"
 )
 $checksums | Set-Content -LiteralPath (Join-Path $StageDirectory "SHA256SUMS.txt") -Encoding ASCII
 

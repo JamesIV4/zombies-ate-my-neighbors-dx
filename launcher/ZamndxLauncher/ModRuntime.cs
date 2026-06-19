@@ -32,7 +32,7 @@ internal static class ModRuntime
         PatchSettings patches,
         IWin32Window owner)
     {
-        AppPaths.ValidateBundle();
+        AppPaths.ValidateBundle(UsesBsnesHdRuntime(patches));
         EnsurePatchedRom(patches, owner);
         Directory.CreateDirectory(AppPaths.RuntimeDirectory);
         File.Copy(AppPaths.BundledLuaPath, AppPaths.RuntimeLuaPath, true);
@@ -41,7 +41,7 @@ internal static class ModRuntime
         SettingsStore.Save(settings);
     }
 
-    internal static Process StartGame()
+    internal static Process StartGame(PatchSettings patches)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -56,9 +56,28 @@ internal static class ModRuntime
         startInfo.ArgumentList.Add(AppPaths.BizHawkConfigPath);
         startInfo.ArgumentList.Add("--lua");
         startInfo.ArgumentList.Add(AppPaths.RuntimeLuaPath);
-        startInfo.ArgumentList.Add(AppPaths.PatchedRomPath);
+        startInfo.ArgumentList.Add(BuildBizHawkRomArgument(patches));
         return Process.Start(startInfo)
             ?? throw new InvalidOperationException("BizHawk could not be started.");
+    }
+
+    internal static bool UsesBsnesHdRuntime(PatchSettings patches) =>
+        patches.IsEnabled(RomPatchCatalog.WidescreenId)
+        && RomPatchCatalog.IsAvailable(RomPatchCatalog.WidescreenPatch);
+
+    internal static string BuildBizHawkRomArgument(PatchSettings patches)
+    {
+        if (!UsesBsnesHdRuntime(patches))
+        {
+            return AppPaths.PatchedRomPath;
+        }
+
+        var token = JsonSerializer.Serialize(new LibretroOpenAdvancedToken
+        {
+            Path = AppPaths.PatchedRomPath,
+            CorePath = AppPaths.BundledBsnesHdCorePath,
+        });
+        return "*Libretro*" + token;
     }
 
     // SNES LoROM checksum/complement live at the end of the first bank. After
@@ -301,6 +320,7 @@ internal static class ModRuntime
         config["AcceptBackgroundInputControllerOnly"] = true;
         config["LastWrittenFrom"] = "2.11.1";
         config["LastWrittenFromDetailed"] = "Version 2.11.1";
+        config["LibretroCore"] = AppPaths.BundledBsnesHdCorePath;
 
         // The battery-save patch persists progress to SRAM. BizHawk only writes
         // SaveRAM to disk on a clean close by default, so flush it periodically
@@ -321,7 +341,10 @@ internal static class ModRuntime
         luaConsoleSettings["FloatingWindow"] = false;
         luaConsoleSettings["AutoLoad"] = false;
 
-        WriteSnesControllerBindings(config, settings, scheme);
+        var buttonMap = BuildButtonMap(settings, scheme);
+        WriteSnesControllerBindings(config, buttonMap);
+        WriteLibretroControllerBindings(config, buttonMap);
+        WriteBizHawkPathEntries(config);
 
         File.WriteAllText(
             AppPaths.BizHawkConfigPath,
@@ -334,17 +357,37 @@ internal static class ModRuntime
     // several SNES buttons is a combo; comma-separated controls OR together.
     // Buttons with no host are cleared so BizHawk's defaults cannot leak in.
     private static void WriteSnesControllerBindings(
-        JsonObject config, ControllerSettings settings, ControlScheme scheme)
+        JsonObject config,
+        Dictionary<string, List<string>> buttonMap)
     {
         var controllers = config["AllTrollers"] as JsonObject ?? new JsonObject();
         config["AllTrollers"] = controllers;
         var snes = controllers["SNES Controller"] as JsonObject ?? new JsonObject();
         controllers["SNES Controller"] = snes;
 
-        var buttonMap = BuildButtonMap(settings, scheme);
         foreach (var snesButton in ControlSchemes.SnesButtons)
         {
             snes[$"P1 {snesButton}"] = string.Join(", ", buttonMap[snesButton]);
+        }
+    }
+
+    private static void WriteLibretroControllerBindings(
+        JsonObject config,
+        Dictionary<string, List<string>> buttonMap)
+    {
+        var controllers = config["AllTrollers"] as JsonObject ?? new JsonObject();
+        config["AllTrollers"] = controllers;
+        var libretro = controllers["LibRetro Controls"] as JsonObject ?? new JsonObject();
+        controllers["LibRetro Controls"] = libretro;
+
+        foreach (var snesButton in ControlSchemes.SnesButtons)
+        {
+            libretro[$"P1 RetroPad {snesButton}"] = string.Join(", ", buttonMap[snesButton]);
+        }
+
+        foreach (var unusedButton in new[] { "L2", "R2", "L3", "R3" })
+        {
+            libretro[$"P1 RetroPad {unusedButton}"] = string.Empty;
         }
     }
 
@@ -377,6 +420,50 @@ internal static class ModRuntime
         return snesHosts;
     }
 
+    private static void WriteBizHawkPathEntries(JsonObject config)
+    {
+        Directory.CreateDirectory(AppPaths.BizHawkLibretroCoresDirectory);
+        Directory.CreateDirectory(AppPaths.BizHawkLibretroSystemDirectory);
+        Directory.CreateDirectory(AppPaths.BizHawkLibretroSaveRamDirectory);
+
+        var pathEntries = config["PathEntries"] as JsonObject ?? new JsonObject();
+        config["PathEntries"] = pathEntries;
+
+        var paths = pathEntries["Paths"] as JsonArray ?? new JsonArray();
+        pathEntries["Paths"] = paths;
+        pathEntries["UseRecentForRoms"] = false;
+        pathEntries["LastRomPath"] = AppPaths.GamesDirectory;
+
+        UpsertPath(paths, "Libretro", "Base", AppPaths.BizHawkLibretroDirectory);
+        UpsertPath(paths, "Libretro", "Cores", AppPaths.BizHawkLibretroCoresDirectory);
+        UpsertPath(paths, "Libretro", "System", AppPaths.BizHawkLibretroSystemDirectory);
+        UpsertPath(paths, "Libretro", "Save RAM", AppPaths.BizHawkLibretroSaveRamDirectory);
+    }
+
+    private static void UpsertPath(JsonArray paths, string system, string type, string path)
+    {
+        for (var index = paths.Count - 1; index >= 0; index--)
+        {
+            if (paths[index] is not JsonObject entry)
+            {
+                continue;
+            }
+
+            if (string.Equals((string?)entry["System"], system, StringComparison.Ordinal)
+                && string.Equals((string?)entry["Type"], type, StringComparison.Ordinal))
+            {
+                paths.RemoveAt(index);
+            }
+        }
+
+        paths.Add(new JsonObject
+        {
+            ["Type"] = type,
+            ["Path"] = Path.GetFullPath(path),
+            ["System"] = system,
+        });
+    }
+
     private static void WriteLuaConfig(ControllerSettings settings)
     {
         static string Quote(string value)
@@ -401,6 +488,12 @@ internal static class ModRuntime
         text.AppendLine("\t},");
         text.AppendLine("}");
         File.WriteAllText(AppPaths.RuntimeConfigPath, text.ToString(), new UTF8Encoding(false));
+    }
+
+    private sealed class LibretroOpenAdvancedToken
+    {
+        public string Path { get; set; } = string.Empty;
+        public string CorePath { get; set; } = string.Empty;
     }
 }
 

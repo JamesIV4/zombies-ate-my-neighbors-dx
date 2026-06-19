@@ -29,6 +29,9 @@ clone.Bindings["fire"] = "B";
 Check(settings.Bindings["fire"] == "X", "settings clone isolation");
 Check(settings.Bindings["use_item"] == "Y", "stock use-item default binding");
 
+Directory.CreateDirectory(AppPaths.ModDirectory);
+File.WriteAllBytes(AppPaths.BundledPatchPath("widescreen.ips"), [0x00]);
+
 var stock = ControlSchemes.Stock;
 var reverse = ControlSchemes.ReverseCycling;
 Check(stock.Actions.Any(a => a.Id == "change_weapon"), "stock scheme has change weapon");
@@ -73,6 +76,36 @@ Check(reverseCycling is { Mandatory: false } && reverseCycling.ExpectedSha256?.L
 var savePatch = RomPatchCatalog.Optional.SingleOrDefault(patch => patch.Id == "save");
 Check(savePatch is { Mandatory: false } && savePatch.ExpectedSha256?.Length == 64,
     "battery-save patch registered with integrity hash");
+var widescreen = RomPatchCatalog.Optional.SingleOrDefault(patch => patch.Id == "widescreen");
+Check(widescreen is { Mandatory: false, DefaultEnabled: true } && widescreen.ExpectedSha256?.Length == 64,
+    "widescreen patch registered default-on with integrity hash");
+Check(
+    RomPatchCatalog.Optional.First().Id == RomPatchCatalog.WidescreenId,
+    "widescreen patch applied before third-party optionals");
+var defaultPatchSettings = PatchSettingsStore.CreateDefault();
+Check(
+    defaultPatchSettings.Enabled.SequenceEqual(
+        RomPatchCatalog.Optional.Where(patch => patch.DefaultEnabled).Select(patch => patch.Id)),
+    "default patch settings enable default-on optionals");
+Check(
+    defaultPatchSettings.KnownPatchIds.SequenceEqual(RomPatchCatalog.Optional.Select(patch => patch.Id)),
+    "default patch settings remember catalog ids");
+var migratedLegacyPatchSettings = PatchSettingsStore.Normalize(
+    new PatchSettings { Enabled = [] },
+    seedMissingDefaults: true);
+Check(
+    migratedLegacyPatchSettings.Enabled.SequenceEqual(defaultPatchSettings.Enabled),
+    "legacy empty patch settings seed default-on optionals");
+var savedOptOutPatchSettings = PatchSettingsStore.Normalize(
+    new PatchSettings
+    {
+        Enabled = ["widescreen"],
+        KnownPatchIds = [.. RomPatchCatalog.Optional.Select(patch => patch.Id)],
+    },
+    seedMissingDefaults: true);
+Check(
+    savedOptOutPatchSettings.Enabled.SequenceEqual(new[] { "widescreen" }),
+    "known patch opt-outs stay off during normalization");
 
 // Power-of-two ROMs sum every byte; a 1.5x ROM mirrors the trailing region.
 Check(
@@ -95,6 +128,19 @@ Check(patchSettings.Enabled.Count == 3, "patch settings clone isolation");
 Check(
     patchSettings.ResolveOrderedIds().First() == "dx",
     "resolved patch ids start with the base patch");
+var widescreenSettings = new PatchSettings { Enabled = ["widescreen"] };
+Check(
+    ModRuntime.UsesBsnesHdRuntime(widescreenSettings),
+    "widescreen patch selects bsnes-hd runtime");
+var libretroArgument = ModRuntime.BuildBizHawkRomArgument(widescreenSettings);
+Check(
+    libretroArgument.StartsWith("*Libretro*") &&
+        libretroArgument.Contains("bsnes_hd_beta_zamndx_libretro.dll") &&
+        libretroArgument.Contains(AppPaths.PatchedRomName),
+    "widescreen launch uses BizHawk OpenAdvanced libretro argument");
+Check(
+    ModRuntime.BuildBizHawkRomArgument(new PatchSettings { Enabled = [] }) == AppPaths.PatchedRomPath,
+    "non-widescreen launch uses BizHawk normal ROM path");
 
 var patchedRomHash = typeof(ModRuntime).Assembly
     .GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -121,6 +167,12 @@ Check(
     bizHawkConfig.Contains("\"P1 B\": \"X1 RightTrigger, X1 LeftTrigger\""),
     "BizHawk SNES weapon cycle bound to both triggers");
 Check(
+    bizHawkConfig.Contains("\"P1 RetroPad B\": \"X1 RightTrigger, X1 LeftTrigger\""),
+    "BizHawk libretro weapon cycle bound to both triggers");
+Check(
+    bizHawkConfig.Contains("\"P1 RetroPad Y\": \"X1 X, X1 A\""),
+    "BizHawk libretro fire buttons follow the active scheme");
+Check(
     bizHawkConfig.Contains("\"P1 R\": \"X1 B\""),
     "BizHawk SNES radar bound to the east face button");
 Check(
@@ -135,6 +187,13 @@ Check(
 Check(
     bizHawkConfig.Contains("\"TopMost\": false"),
     "BizHawk Lua console topmost disabled");
+Check(
+    bizHawkConfig.Contains("bsnes_hd_beta_zamndx_libretro.dll"),
+    "BizHawk config records the bundled bsnes-hd libretro core");
+Check(
+    bizHawkConfig.Contains("\"System\": \"Libretro\"") &&
+        bizHawkConfig.Contains("\"Type\": \"Save RAM\""),
+    "BizHawk config owns libretro SaveRAM paths");
 Check(WindowTools.IsLuaConsoleTitle("Lua Console"), "Lua console title detection");
 Check(WindowTools.IsLuaConsoleTitle("lua console"), "Lua console title detection case");
 Check(!WindowTools.IsLuaConsoleTitle("Zombies Ate My Neighbors"), "game window title detection");

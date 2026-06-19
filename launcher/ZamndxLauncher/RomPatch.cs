@@ -35,6 +35,15 @@ internal static class RomPatchCatalog
     internal static readonly IReadOnlyList<RomPatch> Optional =
     [
         new RomPatch(
+            Id: "widescreen",
+            Name: "Widescreen",
+            Description: "Extends the playfield for bsnes-hd/HD Mode 7 output. "
+                + "Requires the bundled bsnes-hd libretro runtime.",
+            FileName: "widescreen.ips",
+            Mandatory: false,
+            DefaultEnabled: true,
+            ExpectedSha256: "53978CB3067E6348617768A1216580C426C44B3398324E60C5B0E62E5B423C72"),
+        new RomPatch(
             Id: "bloody",
             Name: "Bloody Disgusting Edition",
             Description: "Restores uncensored red blood on the Game Over screen "
@@ -68,9 +77,13 @@ internal static class RomPatchCatalog
     ];
 
     internal const string ReverseCyclingId = "reverse-cycling";
+    internal const string WidescreenId = "widescreen";
 
     internal static RomPatch ReverseCyclingPatch =>
         Optional.Single(patch => patch.Id == ReverseCyclingId);
+
+    internal static RomPatch WidescreenPatch =>
+        Optional.Single(patch => patch.Id == WidescreenId);
 
     /// <summary>Base first, then optional patches in their declared order.</summary>
     internal static IEnumerable<RomPatch> All => Optional.Prepend(Base);
@@ -86,10 +99,15 @@ internal static class RomPatchCatalog
 internal sealed class PatchSettings
 {
     public List<string> Enabled { get; set; } = [];
+    public List<string> KnownPatchIds { get; set; } = [];
 
     internal bool IsEnabled(string id) => Enabled.Contains(id);
 
-    internal PatchSettings Clone() => new() { Enabled = [.. Enabled] };
+    internal PatchSettings Clone() => new()
+    {
+        Enabled = [.. Enabled],
+        KnownPatchIds = [.. KnownPatchIds],
+    };
 
     /// <summary>The patch ids to stack, in catalog order: base then optional.</summary>
     internal IReadOnlyList<string> ResolveOrderedIds()
@@ -126,7 +144,7 @@ internal static class PatchSettingsStore
             var settings = JsonSerializer.Deserialize<PatchSettings>(
                 File.ReadAllText(AppPaths.PatchSettingsPath),
                 JsonOptions);
-            return Normalize(settings ?? CreateDefault());
+            return Normalize(settings ?? CreateDefault(), seedMissingDefaults: true);
         }
         catch
         {
@@ -139,10 +157,12 @@ internal static class PatchSettingsStore
         Directory.CreateDirectory(AppPaths.UserRoot);
         File.WriteAllText(
             AppPaths.PatchSettingsPath,
-            JsonSerializer.Serialize(Normalize(settings), JsonOptions));
+            JsonSerializer.Serialize(
+                Normalize(settings, seedMissingDefaults: false),
+                JsonOptions));
     }
 
-    private static PatchSettings CreateDefault() => new()
+    internal static PatchSettings CreateDefault() => new()
     {
         Enabled =
         [
@@ -150,18 +170,42 @@ internal static class PatchSettingsStore
                 .Where(patch => patch.DefaultEnabled)
                 .Select(patch => patch.Id),
         ],
+        KnownPatchIds = [.. RomPatchCatalog.Optional.Select(patch => patch.Id)],
     };
 
-    /// <summary>Drop unknown ids and keep them in catalog order without duplicates.</summary>
-    private static PatchSettings Normalize(PatchSettings settings)
+    /// <summary>
+    /// Drop unknown ids, keep catalog order, and seed default-on patches that a
+    /// saved profile has never seen. This lets new optional defaults turn on
+    /// without forgetting a user's deliberate opt-outs for known patches.
+    /// </summary>
+    internal static PatchSettings Normalize(
+        PatchSettings settings,
+        bool seedMissingDefaults)
     {
         settings.Enabled ??= [];
+        settings.KnownPatchIds ??= [];
+
+        if (seedMissingDefaults)
+        {
+            var knownPatchIds = settings.KnownPatchIds.ToHashSet(StringComparer.Ordinal);
+            foreach (var patch in RomPatchCatalog.Optional)
+            {
+                if (patch.DefaultEnabled
+                    && !knownPatchIds.Contains(patch.Id)
+                    && !settings.Enabled.Contains(patch.Id))
+                {
+                    settings.Enabled.Add(patch.Id);
+                }
+            }
+        }
+
         settings.Enabled =
         [
             .. RomPatchCatalog.Optional
                 .Where(patch => settings.Enabled.Contains(patch.Id))
                 .Select(patch => patch.Id),
         ];
+        settings.KnownPatchIds = [.. RomPatchCatalog.Optional.Select(patch => patch.Id)];
         return settings;
     }
 }

@@ -54,7 +54,7 @@ internal sealed class MainForm : Form
         _patches = PatchSettingsStore.Load();
 
         Text = "Zombies Ate My Neighbors DX";
-        ClientSize = new Size(720, 548);
+        ClientSize = new Size(720, 586);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -66,12 +66,12 @@ internal sealed class MainForm : Form
         Controls.Add(new Panel
         {
             Location = new Point(0, 0),
-            Size = new Size(8, 548),
+            Size = new Size(8, 586),
             BackColor = Theme.Purple,
         });
         Controls.Add(CreateSplitTitle());
         Controls.Add(Theme.Label(
-            "Analog movement. Twin-stick shooting. Bigger hitboxes.",
+            "Analog movement. Twin-stick shooting. Widescreen.",
             50, 110, 560, 30, 12, Theme.Text));
 
         var card = new Panel
@@ -81,42 +81,42 @@ internal sealed class MainForm : Form
             BackColor = Theme.Surface,
         };
         card.Controls.Add(Theme.Label("MOD READY", 22, 18, 104, 24, 9, Theme.Lime, FontStyle.Bold));
-        card.Controls.Add(Theme.Label("50% larger interactions", 22, 50, 185, 24, 10, Theme.Text, FontStyle.Bold));
-        card.Controls.Add(Theme.Label("360-degree movement", 218, 50, 185, 24, 10, Theme.Text, FontStyle.Bold));
-        card.Controls.Add(Theme.Label("Independent aiming", 414, 50, 175, 24, 10, Theme.Text, FontStyle.Bold));
-        card.Controls.Add(Theme.Label("Enemy and item contact", 22, 75, 185, 20, 9, Theme.Muted));
-        card.Controls.Add(Theme.Label("Variable speed on left stick", 218, 75, 190, 20, 9, Theme.Muted));
-        card.Controls.Add(Theme.Label("Fire with the right stick", 414, 75, 185, 20, 9, Theme.Muted));
+        card.Controls.Add(Theme.Label("Widescreen playfield", 22, 50, 175, 24, 10, Theme.Text, FontStyle.Bold));
+        card.Controls.Add(Theme.Label("Analog twin-stick controls", 215, 50, 205, 24, 10, Theme.Text, FontStyle.Bold));
+        card.Controls.Add(Theme.Label("Bigger item hitboxes", 438, 50, 166, 24, 10, Theme.Text, FontStyle.Bold));
+        card.Controls.Add(Theme.Label("Default-on ROM extension", 22, 75, 175, 20, 9, Theme.Muted));
+        card.Controls.Add(Theme.Label("Move and aim independently", 215, 75, 205, 20, 9, Theme.Muted));
+        card.Controls.Add(Theme.Label("Easier pickups and rescues", 438, 75, 166, 20, 9, Theme.Muted));
         Controls.Add(card);
 
-        _patchSummary = Theme.Label("", 50, 282, 622, 24, 10, Theme.Lime, FontStyle.Bold);
+        _patchSummary = Theme.Label("", 50, 282, 622, 48, 10, Theme.Lime, FontStyle.Bold);
         Controls.Add(_patchSummary);
 
         _play = Theme.Button(
-            "Play Game", 48, 320, 296, 58,
+            "Play Game", 48, 340, 296, 58,
             Theme.Lime, Theme.Background, Theme.LimeHover);
         _play.Click += async (_, _) => await PlayGameAsync();
         Controls.Add(_play);
 
         _configure = Theme.Button(
-            "Configure Controller", 376, 320, 296, 58,
+            "Configure Controller", 376, 340, 296, 58,
             Theme.Purple, Theme.Text, Theme.PurpleHover);
         _configure.Click += (_, _) => ConfigureController();
         Controls.Add(_configure);
 
         _romPatches = Theme.Button(
-            "Configure ROM Patches", 48, 390, 624, 46,
+            "Configure ROM Patches", 48, 410, 624, 46,
             Theme.SurfaceRaised, Theme.Text, Theme.Purple);
         _romPatches.Click += (_, _) => ConfigurePatches();
         Controls.Add(_romPatches);
 
         _quit = Theme.Button(
-            "Quit", 48, 448, 624, 42,
+            "Quit", 48, 468, 624, 42,
             Theme.SurfaceRaised, Theme.Text, Theme.Purple);
         _quit.Click += (_, _) => Close();
         Controls.Add(_quit);
 
-        _status = Theme.Label("Checking controller...", 49, 502, 620, 22, 9.5f, Theme.Muted);
+        _status = Theme.Label("Checking controller...", 49, 540, 620, 22, 9.5f, Theme.Muted);
         Controls.Add(_status);
 
         UpdatePatchSummary();
@@ -163,7 +163,7 @@ internal sealed class MainForm : Form
 
         _patchSummary.Text = active.Count == 0
             ? "ROM patches: core only"
-            : "ROM patches: " + string.Join(", ", active);
+            : "ROM patches active: " + string.Join(", ", active);
     }
 
     private async Task PlayGameAsync()
@@ -176,7 +176,7 @@ internal sealed class MainForm : Form
             ModRuntime.Prepare(_settings, _patches, this);
 
             SetStatus("Starting in full screen...", Theme.Lime);
-            var process = ModRuntime.StartGame();
+            var process = ModRuntime.StartGame(_patches);
             Hide();
 
             await WindowTools.CoordinateGameStartupAsync(

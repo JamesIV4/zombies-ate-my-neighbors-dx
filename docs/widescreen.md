@@ -1,14 +1,17 @@
 # Widescreen (optional feature) — plan & progress
 
-Status: **widescreen ROM hook is Mesen-stable, including level-edge clamps and a
-gameplay-only off-map black fill.** `mesen_ws_verify.lua`, `mesen_offmap_black_verify.lua`,
-and `mesen_black_fix_verify.lua` all pass with `failures=0`. The build fills **10 strip
-columns per side** (about 80 px), clamps the horizontal camera 8 tiles inside each edge,
-and paints true off-map strip columns with an opaque black BG1 tile **calibrated to the
-real gameplay palette/VRAM** (char base `$5000`, CGRAM `$08`, free tile `$27F` — see §6
-bug 9). The gather is incremental and now goes idle after post-scroll catch-up, so the
-steady-state cost is much lower than the earlier full-refill attempt. Final bsnes-hd
-visual recheck is still the next human-facing validation step.
+Status: **widescreen is integrated as a default-on optional ZAMN-DX extension.**
+The ROM hook is Mesen-stable, including level-edge clamps and a gameplay-only
+off-map black fill. `mesen_ws_verify.lua`, `mesen_offmap_black_verify.lua`, and
+`mesen_black_fix_verify.lua` all pass with `failures=0`. The launcher now stacks
+`mod/widescreen.ips` by default and starts BizHawk through the bundled repo-owned
+`bsnes_hd_beta_zamndx_libretro.dll`, whose core-option defaults are patched for
+ZAMN-DX widescreen. The build fills **10 strip columns per side** (about 80 px),
+clamps the horizontal camera 8 tiles inside each edge, and paints true off-map
+strip columns with an opaque black BG1 tile calibrated to gameplay palette/VRAM
+(char base `$5000`, CGRAM `$08`, free tile `$27F`; see §6 bug 9). The gather is
+incremental and now goes idle after post-scroll catch-up, so the steady-state
+cost is much lower than the earlier full-refill attempt.
 
 ---
 
@@ -45,18 +48,39 @@ Loading **unpatched** ZAMN in bsnes-hd with widescreen + "render sprites anywher
 - **Background:** the one real problem — the leading strip shows stale tiles. **This
   is what the ROM hook fixes.**
 
-## 3. Emulator hosting (open question, deferred)
+## 3. Emulator hosting
 
-We currently run the mod in **BizHawk** (its Lua drives the analog/aim runtime).
-BizHawk **cannot host bsnes-hd cleanly** — three independent walls:
-1. its libretro host forces core options to defaults (can't enable widescreen),
-2. it has no command-line way to load a libretro core,
-3. its libretro video/memory support is experimental.
+The runtime target remains **BizHawk** because its Lua API drives analog movement
+and right-stick aiming. BizHawk 2.11.1 can host libretro cores through its
+OpenAdvanced path, and its command-line ROM argument accepts the serialized
+OpenAdvanced string:
 
-So for now the user tests the ROM in **standalone bsnes-hd**. Shipping widescreen in
-the launcher will require either a custom-default bsnes-hd libretro core + patched
-BizHawk loader, or another hosting approach. **The ROM hook is independent of this**
-and is the long pole, so it's being built first.
+```text
+*Libretro*{"Path":"...patched rom...","CorePath":"...bsnes_hd_beta_zamndx_libretro.dll"}
+```
+
+BizHawk's libretro bridge only exposes core-option **defaults** to the core; it
+does not persist arbitrary libretro option overrides. To keep the release stable,
+ZAMN-DX therefore ships a repo-owned patched copy of `bsnes_hd_beta_libretro.dll`
+as `mod/bsnes_hd_beta_zamndx_libretro.dll`. The release builder copies that exact
+binary into `runtime/BizHawk/Libretro/Cores/`.
+
+The patched bsnes-hd defaults are:
+
+| Core option | Default |
+|---|---|
+| `bsnes_mode7_wsMode` | `all` |
+| `bsnes_mode7_widescreen` | `16:9` (upstream default) |
+| `bsnes_mode7_wsobj` | `unsafe` |
+| `bsnes_mode7_wsbg1` | `off` |
+| `bsnes_mode7_wsbg2` | `on` |
+| `bsnes_mode7_wsbg3` | `off` |
+| `bsnes_mode7_wsbg4` | `on` |
+
+The source note for layer settings repeated layer 4 in both the off/on lists; the
+current bundled core uses the coherent 1/3 off, 2/4 on configuration. Update the
+tracked DLL deliberately with `tools/build_bsnes_hd_core.py` if that calibration
+changes.
 
 ---
 
@@ -374,6 +398,7 @@ screens are left untouched.
 | `tools/asm65816.py` | Minimal two-pass 65816 **assembler** (labels, all addressing modes). Validated by round-trip through the disassembler. |
 | `tools/diagnostics/re65816.py` | 65816 **disassembler** + PPU/DMA register-write **scanner**. `dis bb:aaaa N`, `scan`, `--rom`. |
 | `tools/build_widescreen.py` | Assembles the hook, applies both trampolines + the routine to the DX ROM, fixes checksum, emits `mod/widescreen.ips` and a ready test ROM. |
+| `tools/build_bsnes_hd_core.py` | Patches an upstream bsnes-hd libretro DLL's core-option defaults to produce the repo-owned ZAMN-DX core DLL. Release builds do not download or regenerate this automatically. |
 | `tools/diagnostics/mesen_wram_probe.lua` | Dumps live WRAM (found map extent + free scratch). |
 | `tools/diagnostics/mesen_ws_trace.lua` | Stability/scroll trace (catches hangs, logs camera). |
 | `tools/diagnostics/mesen_ws_verify.lua` | BG data-correctness check (colbuf ↔ map ↔ VRAM). |
@@ -433,8 +458,10 @@ Produces:
 - `dist/Zombies Ate My Neighbors DX Widescreen.sfc` (DX + widescreen, checksum fixed)
 - `mod/widescreen.ips` (stacks on the DX ROM)
 
-Test in **standalone bsnes-hd** with `WideScreen Mode = all scenes` (+ render sprites
-anywhere). Walk around and watch the leading edges fill with correct terrain.
+The launcher applies `mod/widescreen.ips` as a default-on optional patch and
+launches the patched ROM in BizHawk through the bundled bsnes-hd libretro core.
+For standalone visual checks, use bsnes-hd with `WideScreen Mode = all scenes`
+and render sprites anywhere.
 
 ---
 
@@ -470,6 +497,7 @@ anywhere). Walk around and watch the leading edges fill with correct terrain.
       edges and confirm the camera clamp looks clean in standalone bsnes-hd.
 - [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment.
 - [ ] **BG2** — the 32×32 second layer may need its own pass if it shows strip garbage.
-- [ ] **Hosting** — decide how to run bsnes-hd alongside the analog runtime (see §3).
-- [ ] **Launcher integration** — optional toggle + `build_release` staging + auto
-      aspect-ratio detection, once the BG result is confirmed.
+- [x] **Hosting** - launcher starts BizHawk through OpenAdvanced libretro when the
+      Widescreen patch is enabled, using the repo-owned patched bsnes-hd DLL.
+- [x] **Launcher integration** - Widescreen is a default-on optional ROM patch and
+      is staged into releases with the matching bsnes-hd core.

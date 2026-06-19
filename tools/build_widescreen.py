@@ -105,9 +105,6 @@ CAMERA_RIGHT_MARGIN = CAMERA_RIGHT_MARGIN_TILES * 8
 # $08 (palette 0, color index 8) is black on both levels -- index 8 is the engine's "black"
 # (black in BG palettes 0,2,3,4,5 and every sprite palette). So the off-map cell is
 # priority|palette0|tile $27F and tile $27F is a solid color-8 fill.
-#   NOTE: the previous attempt sampled the level-2 LOADING screen (char base $1000, palette
-#   2 color $A == CGRAM $2A) -- both wrong for gameplay (different char base AND a non-black
-#   palette entry once the level palette loads), which is why the off-map area showed green.
 GAMEPLAY_BG1_CHARBASE = 0x5000        # words; BG1 tile-graphics base during gameplay ($210B=$25)
 BLACK_TILE_INDEX = 0x27F
 BLACK_CELL = 0x2000 | (0 << 10) | BLACK_TILE_INDEX                 # priority | palette 0 | tile $27F

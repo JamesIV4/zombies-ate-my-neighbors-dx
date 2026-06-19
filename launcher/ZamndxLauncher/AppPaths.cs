@@ -19,6 +19,10 @@ internal static class AppPaths
     internal static readonly string RuntimeConfigPath = Path.Combine(RuntimeDirectory, "zamndx-controller-config.lua");
     internal static readonly string BizHawkUserDirectory = Path.Combine(UserRoot, "BizHawk");
     internal static readonly string BizHawkConfigPath = Path.Combine(BizHawkUserDirectory, "config.ini");
+    internal static readonly string BizHawkLibretroDirectory = Path.Combine(BizHawkUserDirectory, "Libretro");
+    internal static readonly string BizHawkLibretroCoresDirectory = Path.Combine(BizHawkLibretroDirectory, "Cores");
+    internal static readonly string BizHawkLibretroSystemDirectory = Path.Combine(BizHawkLibretroDirectory, "System");
+    internal static readonly string BizHawkLibretroSaveRamDirectory = Path.Combine(BizHawkLibretroDirectory, "SaveRAM");
 
     internal static readonly string ModDirectory = Path.Combine(BundleRoot, "mod");
     internal static readonly string BundledIpsPath = Path.Combine(ModDirectory, "zamndx.ips");
@@ -32,14 +36,25 @@ internal static class AppPaths
         "runtime",
         "BizHawk",
         "EmuHawk.exe");
+    internal static readonly string BundledBizHawkDirectory =
+        Path.GetDirectoryName(BundledBizHawkPath)!;
+    internal static readonly string BundledBsnesHdCorePath = Path.Combine(
+        BundledBizHawkDirectory,
+        "Libretro",
+        "Cores",
+        "bsnes_hd_beta_zamndx_libretro.dll");
     internal static readonly string AdjacentSourceRomPath = Path.Combine(BundleRoot, SourceRomName);
 
-    internal static void ValidateBundle()
+    internal static void ValidateBundle(bool requireBsnesHdCore)
     {
         var missing = new List<string>();
         if (!File.Exists(BundledIpsPath)) missing.Add("mod\\zamndx.ips");
         if (!File.Exists(BundledLuaPath)) missing.Add("mod\\zamndx.lua");
         if (!File.Exists(BundledBizHawkPath)) missing.Add("runtime\\BizHawk\\EmuHawk.exe");
+        if (requireBsnesHdCore && !File.Exists(BundledBsnesHdCorePath))
+        {
+            missing.Add("runtime\\BizHawk\\Libretro\\Cores\\bsnes_hd_beta_zamndx_libretro.dll");
+        }
 
         if (missing.Count > 0)
         {

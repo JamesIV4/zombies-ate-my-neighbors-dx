@@ -10,9 +10,10 @@ internal sealed class PatchesForm : Form
     internal PatchesForm(PatchSettings current)
     {
         _settings = current.Clone();
+        var buttonY = Math.Max(416, 182 + RomPatchCatalog.Optional.Count * 78 + 12);
 
         Text = "Configure ROM Patches";
-        ClientSize = new Size(620, 470);
+        ClientSize = new Size(620, buttonY + 54);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -54,7 +55,7 @@ internal sealed class PatchesForm : Form
         }
 
         var cancel = Theme.Button(
-            "Cancel", 378, 416, 100, 40,
+            "Cancel", 378, buttonY, 100, 40,
             Theme.SurfaceRaised, Theme.Text, Theme.Purple);
         cancel.Click += (_, _) =>
         {
@@ -64,7 +65,7 @@ internal sealed class PatchesForm : Form
         Controls.Add(cancel);
 
         var save = Theme.Button(
-            "Save", 490, 416, 100, 40,
+            "Save", 490, buttonY, 100, 40,
             Theme.Lime, Theme.Background, Theme.LimeHover);
         save.Click += (_, _) =>
         {
