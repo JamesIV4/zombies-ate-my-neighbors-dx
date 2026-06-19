@@ -4,7 +4,9 @@
 BizHawk 2.11.1 can host libretro cores, but its bridge only exposes core option
 defaults to the core. This patches a deliberately chosen upstream bsnes-hd beta
 DLL so the defaults match the settings required by the ZAMN-DX widescreen ROM
-hack. Release builds consume the tracked patched DLL; they do not download or
+hack. The source DLL should also include tools/bsnes_hd_libretro_wram.patch so
+BizHawk can expose SNES WRAM as mainmemory for the ZAMN-DX controller mailbox.
+Release builds consume the tracked patched DLL; they do not download or
 regenerate it automatically.
 """
 from __future__ import annotations

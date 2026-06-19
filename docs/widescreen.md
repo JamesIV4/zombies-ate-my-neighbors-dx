@@ -65,6 +65,11 @@ ZAMN-DX therefore ships a repo-owned patched copy of `bsnes_hd_beta_libretro.dll
 as `mod/bsnes_hd_beta_zamndx_libretro.dll`. The release builder copies that exact
 binary into `runtime/BizHawk/Libretro/Cores/`.
 
+The bundled core also applies `tools/bsnes_hd_libretro_wram.patch`, which exposes
+SNES WRAM through libretro `RETRO_MEMORY_SYSTEM_RAM`. BizHawk turns that into its
+`mainmemory` domain, allowing the existing Lua twin-stick runtime to write the
+ZAMN-DX controller mailbox while widescreen is running through bsnes-hd.
+
 The patched bsnes-hd defaults are:
 
 | Core option | Default |
