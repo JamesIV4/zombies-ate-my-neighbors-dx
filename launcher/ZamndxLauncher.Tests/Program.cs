@@ -90,6 +90,9 @@ Check(
 Check(
     defaultPatchSettings.KnownPatchIds.SequenceEqual(RomPatchCatalog.Optional.Select(patch => patch.Id)),
     "default patch settings remember catalog ids");
+Check(
+    defaultPatchSettings.WidescreenAspect == WidescreenAspects.SixteenNineId,
+    "default widescreen aspect is 16:9");
 var migratedLegacyPatchSettings = PatchSettingsStore.Normalize(
     new PatchSettings { Enabled = [] },
     seedMissingDefaults: true);
@@ -106,6 +109,15 @@ var savedOptOutPatchSettings = PatchSettingsStore.Normalize(
 Check(
     savedOptOutPatchSettings.Enabled.SequenceEqual(new[] { "widescreen" }),
     "known patch opt-outs stay off during normalization");
+var normalizedAspectSettings = PatchSettingsStore.Normalize(
+    new PatchSettings { WidescreenAspect = "bad-aspect" },
+    seedMissingDefaults: false);
+Check(
+    normalizedAspectSettings.WidescreenAspect == WidescreenAspects.SixteenNineId,
+    "invalid widescreen aspect falls back to 16:9");
+Check(
+    WidescreenAspects.SixteenTen.CameraMarginPixels == 40,
+    "16:10 camera clamp uses five tiles");
 
 // Power-of-two ROMs sum every byte; a 1.5x ROM mirrors the trailing region.
 Check(
@@ -141,6 +153,59 @@ Check(
 Check(
     ModRuntime.BuildBizHawkRomArgument(new PatchSettings { Enabled = [] }) == AppPaths.PatchedRomPath,
     "non-widescreen launch uses BizHawk normal ROM path");
+var widescreenTenSettings = new PatchSettings
+{
+    Enabled = ["widescreen"],
+    WidescreenAspect = WidescreenAspects.SixteenTenId,
+};
+Check(
+    ModRuntime.BsnesHdCorePathFor(widescreenTenSettings).Contains("16x10"),
+    "16:10 widescreen selects a patched runtime core path");
+Check(
+    ModRuntime.BuildBizHawkRomArgument(widescreenTenSettings).Contains("16x10"),
+    "16:10 launch uses the patched runtime core");
+var repoCorePath = Path.Combine(
+    Directory.GetCurrentDirectory(),
+    "mod",
+    "bsnes_hd_beta_zamndx_libretro.dll");
+if (File.Exists(repoCorePath))
+{
+    var temporaryCorePath = Path.Combine(
+        Path.GetTempPath(),
+        $"zamndx-bsnes-hd-core-{Guid.NewGuid():N}.dll");
+    try
+    {
+        LibretroCoreOptions.PatchDefaultOption(
+            repoCorePath,
+            temporaryCorePath,
+            "bsnes_mode7_widescreen",
+            WidescreenAspects.SixteenTen.BsnesOptionValue);
+        Check(
+            File.Exists(temporaryCorePath)
+                && new FileInfo(temporaryCorePath).Length == new FileInfo(repoCorePath).Length,
+            "16:10 bsnes-hd core option patch writes a DLL copy");
+    }
+    finally
+    {
+        File.Delete(temporaryCorePath);
+    }
+}
+
+var clampProbe = new byte[]
+{
+    0xAF, 0x6A, 0x1B, 0x00, 0xC9, 0x41, 0x00, 0xB0, 0x01, 0x6B, 0x5C, 0x90, 0xA6, 0x80,
+    0xEA, 0xEA,
+    0xAF, 0x6A, 0x1B, 0x00, 0x18, 0x69, 0x40, 0x00, 0xCF, 0xB8, 0x00, 0x00, 0x90, 0x01, 0x6B,
+    0xAF, 0x6A, 0x1B, 0x00, 0x5C, 0x12, 0xA7, 0x80,
+};
+ModRuntime.ApplyWidescreenCameraClamp(clampProbe, WidescreenAspects.SixteenTenId);
+Check(
+    clampProbe[5] == 0x29 && clampProbe[6] == 0x00 && clampProbe[22] == 0x28 && clampProbe[23] == 0x00,
+    "16:10 ROM clamp patch writes 40px margins");
+ModRuntime.ApplyWidescreenCameraClamp(clampProbe, WidescreenAspects.SixteenNineId);
+Check(
+    clampProbe[5] == 0x41 && clampProbe[6] == 0x00 && clampProbe[22] == 0x40 && clampProbe[23] == 0x00,
+    "16:9 ROM clamp patch restores 64px margins");
 
 var patchedRomHash = typeof(ModRuntime).Assembly
     .GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -160,7 +225,10 @@ if (!string.IsNullOrWhiteSpace(expectedPatchedRomHash))
         "patched ROM hash MSBuild injection");
 }
 
-ModRuntime.EnsureBizHawkConfig(ControllerSettings.CreateDefault(), ControlSchemes.ReverseCycling);
+ModRuntime.EnsureBizHawkConfig(
+    ControllerSettings.CreateDefault(),
+    ControlSchemes.ReverseCycling,
+    ModRuntime.BsnesHdCorePathFor(widescreenTenSettings));
 var bizHawkConfig = File.ReadAllText(AppPaths.BizHawkConfigPath);
 Check(bizHawkConfig.Contains("\"FirstBoot\": false"), "BizHawk onboarding disabled");
 Check(
@@ -188,8 +256,8 @@ Check(
     bizHawkConfig.Contains("\"TopMost\": false"),
     "BizHawk Lua console topmost disabled");
 Check(
-    bizHawkConfig.Contains("bsnes_hd_beta_zamndx_libretro.dll"),
-    "BizHawk config records the bundled bsnes-hd libretro core");
+    bizHawkConfig.Contains("bsnes_hd_beta_zamndx_libretro_16x10.dll"),
+    "BizHawk config records the selected bsnes-hd libretro core");
 Check(
     bizHawkConfig.Contains("\"System\": \"Libretro\"") &&
         bizHawkConfig.Contains("\"Type\": \"Save RAM\""),

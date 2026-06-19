@@ -17,7 +17,7 @@
     <RootNamespace>ZamndxLauncher</RootNamespace>
     <Product>Zombies Ate My Neighbors DX</Product>
     <Description>Launcher and controller configuration for Zombies Ate My Neighbors DX.</Description>
-    <Version>1.0.0</Version>
+    <Version>1.5.0</Version>
     <ExpectedPatchedRomHash Condition="'$(ExpectedPatchedRomHash)' == ''">7F5D5D818AA4C68BD05367A95A5F2950F354A310648CF1585D06529A0BEFA8D5</ExpectedPatchedRomHash>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>

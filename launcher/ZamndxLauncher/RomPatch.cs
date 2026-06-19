@@ -100,6 +100,7 @@ internal sealed class PatchSettings
 {
     public List<string> Enabled { get; set; } = [];
     public List<string> KnownPatchIds { get; set; } = [];
+    public string WidescreenAspect { get; set; } = WidescreenAspects.SixteenNineId;
 
     internal bool IsEnabled(string id) => Enabled.Contains(id);
 
@@ -107,6 +108,7 @@ internal sealed class PatchSettings
     {
         Enabled = [.. Enabled],
         KnownPatchIds = [.. KnownPatchIds],
+        WidescreenAspect = WidescreenAspect,
     };
 
     /// <summary>The patch ids to stack, in catalog order: base then optional.</summary>
@@ -171,6 +173,7 @@ internal static class PatchSettingsStore
                 .Select(patch => patch.Id),
         ],
         KnownPatchIds = [.. RomPatchCatalog.Optional.Select(patch => patch.Id)],
+        WidescreenAspect = WidescreenAspects.SixteenNineId,
     };
 
     /// <summary>
@@ -184,6 +187,7 @@ internal static class PatchSettingsStore
     {
         settings.Enabled ??= [];
         settings.KnownPatchIds ??= [];
+        settings.WidescreenAspect = WidescreenAspects.Normalize(settings.WidescreenAspect).Id;
 
         if (seedMissingDefaults)
         {

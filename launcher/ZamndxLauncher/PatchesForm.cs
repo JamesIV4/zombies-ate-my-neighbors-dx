@@ -4,6 +4,7 @@ internal sealed class PatchesForm : Form
 {
     private readonly PatchSettings _settings;
     private readonly Dictionary<string, CheckBox> _toggles = [];
+    private ComboBox? _widescreenAspect;
 
     internal PatchSettings? SavedSettings { get; private set; }
 
@@ -75,6 +76,10 @@ internal sealed class PatchesForm : Form
                     .Where(patch => _toggles.TryGetValue(patch.Id, out var box) && box.Checked)
                     .Select(patch => patch.Id),
             ];
+            if (_widescreenAspect?.SelectedItem is WidescreenAspectOption aspect)
+            {
+                _settings.WidescreenAspect = aspect.Id;
+            }
             SavedSettings = _settings.Clone();
             PatchSettingsStore.Save(SavedSettings);
             DialogResult = DialogResult.OK;
@@ -91,7 +96,7 @@ internal sealed class PatchesForm : Form
         {
             Text = patch.Name,
             Location = new Point(30, y),
-            Size = new Size(540, 26),
+            Size = new Size(patch.Id == RomPatchCatalog.WidescreenId ? 330 : 540, 26),
             Checked = available && _settings.IsEnabled(patch.Id),
             Enabled = available,
             ForeColor = available ? Theme.Text : Theme.Muted,
@@ -108,6 +113,30 @@ internal sealed class PatchesForm : Form
         toggle.FlatAppearance.BorderSize = 1;
         _toggles[patch.Id] = toggle;
         Controls.Add(toggle);
+
+        if (patch.Id == RomPatchCatalog.WidescreenId)
+        {
+            Controls.Add(Theme.Label("Aspect", 394, y + 1, 58, 24, 9.5f, Theme.Muted, FontStyle.Bold));
+            var aspect = new ComboBox
+            {
+                Location = new Point(460, y - 1),
+                Size = new Size(110, 28),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Theme.SurfaceRaised,
+                ForeColor = Theme.Text,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI Semibold", 10),
+                Enabled = available && toggle.Checked,
+            };
+            foreach (var option in WidescreenAspects.All)
+            {
+                aspect.Items.Add(option);
+            }
+            aspect.SelectedItem = WidescreenAspects.Normalize(_settings.WidescreenAspect);
+            toggle.CheckedChanged += (_, _) => aspect.Enabled = available && toggle.Checked;
+            _widescreenAspect = aspect;
+            Controls.Add(aspect);
+        }
 
         var description = patch.Description;
         if (!available)

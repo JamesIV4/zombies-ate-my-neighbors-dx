@@ -33,11 +33,12 @@ internal static class ModRuntime
         IWin32Window owner)
     {
         AppPaths.ValidateBundle(UsesBsnesHdRuntime(patches));
+        var bsnesHdCorePath = EnsureBsnesHdCore(patches);
         EnsurePatchedRom(patches, owner);
         Directory.CreateDirectory(AppPaths.RuntimeDirectory);
         File.Copy(AppPaths.BundledLuaPath, AppPaths.RuntimeLuaPath, true);
         WriteLuaConfig(settings);
-        EnsureBizHawkConfig(settings, ControlSchemes.ForPatches(patches));
+        EnsureBizHawkConfig(settings, ControlSchemes.ForPatches(patches), bsnesHdCorePath);
         SettingsStore.Save(settings);
     }
 
@@ -74,9 +75,40 @@ internal static class ModRuntime
         var token = JsonSerializer.Serialize(new LibretroOpenAdvancedToken
         {
             Path = AppPaths.PatchedRomPath,
-            CorePath = AppPaths.BundledBsnesHdCorePath,
+            CorePath = BsnesHdCorePathFor(patches),
         });
         return "*Libretro*" + token;
+    }
+
+    internal static string BsnesHdCorePathFor(PatchSettings patches)
+    {
+        if (!UsesBsnesHdRuntime(patches))
+        {
+            return AppPaths.BundledBsnesHdCorePath;
+        }
+
+        var aspect = WidescreenAspects.Normalize(patches.WidescreenAspect);
+        return aspect.Id == WidescreenAspects.SixteenTenId
+            ? AppPaths.RuntimeBsnesHdCorePath(aspect)
+            : AppPaths.BundledBsnesHdCorePath;
+    }
+
+    private static string EnsureBsnesHdCore(PatchSettings patches)
+    {
+        var path = BsnesHdCorePathFor(patches);
+        if (!UsesBsnesHdRuntime(patches)
+            || path == AppPaths.BundledBsnesHdCorePath)
+        {
+            return path;
+        }
+
+        var aspect = WidescreenAspects.Normalize(patches.WidescreenAspect);
+        LibretroCoreOptions.PatchDefaultOption(
+            AppPaths.BundledBsnesHdCorePath,
+            path,
+            "bsnes_mode7_widescreen",
+            aspect.BsnesOptionValue);
+        return path;
     }
 
     // SNES LoROM checksum/complement live at the end of the first bank. After
@@ -87,7 +119,9 @@ internal static class ModRuntime
     private static void EnsurePatchedRom(PatchSettings patches, IWin32Window owner)
     {
         var desiredIds = patches.ResolveOrderedIds();
-        if (IsCachedRomCurrent(desiredIds))
+        var desiredAspect = ResolveWidescreenAspect(desiredIds, patches);
+        if (IsCachedRomCurrent(desiredIds, desiredAspect)
+            || TryRetargetCachedWidescreenAspect(desiredIds, desiredAspect))
         {
             return;
         }
@@ -158,14 +192,21 @@ internal static class ModRuntime
             rom = IpsPatcher.Apply(rom, patchBytes);
         }
 
+        if (desiredAspect is not null
+            && desiredAspect != WidescreenAspects.SixteenNineId)
+        {
+            ApplyWidescreenCameraClamp(rom, desiredAspect);
+        }
         FixSnesChecksum(rom);
 
         Directory.CreateDirectory(AppPaths.GamesDirectory);
         File.WriteAllBytes(AppPaths.PatchedRomPath, rom);
-        WriteManifest(desiredIds, HashBytes(rom));
+        WriteManifest(desiredIds, desiredAspect, HashBytes(rom));
     }
 
-    private static bool IsCachedRomCurrent(IReadOnlyList<string> desiredIds)
+    private static bool IsCachedRomCurrent(
+        IReadOnlyList<string> desiredIds,
+        string? desiredWidescreenAspect)
     {
         if (!File.Exists(AppPaths.PatchedRomPath))
         {
@@ -176,6 +217,10 @@ internal static class ModRuntime
         if (manifest is not null)
         {
             return manifest.PatchIds.SequenceEqual(desiredIds)
+                && string.Equals(
+                    NormalizeManifestWidescreenAspect(manifest),
+                    desiredWidescreenAspect,
+                    StringComparison.Ordinal)
                 && HashFile(AppPaths.PatchedRomPath) == manifest.Sha256;
         }
 
@@ -186,11 +231,137 @@ internal static class ModRuntime
             && desiredIds[0] == RomPatchCatalog.Base.Id
             && HashFile(AppPaths.PatchedRomPath) == ExpectedPatchedHash)
         {
-            WriteManifest(desiredIds, ExpectedPatchedHash);
+            WriteManifest(desiredIds, desiredWidescreenAspect, ExpectedPatchedHash);
             return true;
         }
 
         return false;
+    }
+
+    private static bool TryRetargetCachedWidescreenAspect(
+        IReadOnlyList<string> desiredIds,
+        string? desiredWidescreenAspect)
+    {
+        if (desiredWidescreenAspect is null || !File.Exists(AppPaths.PatchedRomPath))
+        {
+            return false;
+        }
+
+        var manifest = ReadManifest();
+        if (manifest is null
+            || !manifest.PatchIds.SequenceEqual(desiredIds)
+            || HashFile(AppPaths.PatchedRomPath) != manifest.Sha256)
+        {
+            return false;
+        }
+
+        var currentAspect = NormalizeManifestWidescreenAspect(manifest);
+        if (string.Equals(currentAspect, desiredWidescreenAspect, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            var rom = File.ReadAllBytes(AppPaths.PatchedRomPath);
+            ApplyWidescreenCameraClamp(rom, desiredWidescreenAspect);
+            FixSnesChecksum(rom);
+            var sha256 = HashBytes(rom);
+            File.WriteAllBytes(AppPaths.PatchedRomPath, rom);
+            WriteManifest(desiredIds, desiredWidescreenAspect, sha256);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static string? ResolveWidescreenAspect(
+        IReadOnlyList<string> desiredIds,
+        PatchSettings patches) =>
+        desiredIds.Contains(RomPatchCatalog.WidescreenId)
+            ? WidescreenAspects.Normalize(patches.WidescreenAspect).Id
+            : null;
+
+    private static string? NormalizeManifestWidescreenAspect(PatchManifest manifest) =>
+        manifest.PatchIds.Contains(RomPatchCatalog.WidescreenId)
+            ? WidescreenAspects.Normalize(manifest.WidescreenAspect).Id
+            : null;
+
+    internal static void ApplyWidescreenCameraClamp(byte[] rom, string? widescreenAspect)
+    {
+        if (widescreenAspect is null)
+        {
+            return;
+        }
+
+        var aspect = WidescreenAspects.Normalize(widescreenAspect);
+        PatchWordAtUniquePattern(
+            rom,
+            [
+                0xAF, 0x6A, 0x1B, 0x00,
+                0xC9, null, null,
+                0xB0, 0x01, 0x6B,
+                0x5C, 0x90, 0xA6, 0x80,
+            ],
+            valueOffset: 5,
+            value: aspect.CameraMarginPixels + 1);
+        PatchWordAtUniquePattern(
+            rom,
+            [
+                0xAF, 0x6A, 0x1B, 0x00,
+                0x18,
+                0x69, null, null,
+                0xCF, 0xB8, 0x00, 0x00,
+                0x90, 0x01, 0x6B,
+                0xAF, 0x6A, 0x1B, 0x00,
+                0x5C, 0x12, 0xA7, 0x80,
+            ],
+            valueOffset: 6,
+            value: aspect.CameraMarginPixels);
+    }
+
+    private static void PatchWordAtUniquePattern(
+        byte[] data,
+        byte?[] pattern,
+        int valueOffset,
+        int value)
+    {
+        var match = -1;
+        for (var index = 0; index <= data.Length - pattern.Length; index++)
+        {
+            var found = true;
+            for (var patternIndex = 0; patternIndex < pattern.Length; patternIndex++)
+            {
+                if (pattern[patternIndex] is { } expected && data[index + patternIndex] != expected)
+                {
+                    found = false;
+                    break;
+                }
+            }
+
+            if (!found)
+            {
+                continue;
+            }
+
+            if (match >= 0)
+            {
+                throw new InvalidOperationException(
+                    "The widescreen camera clamp pattern is not unique.");
+            }
+            match = index;
+        }
+
+        if (match < 0)
+        {
+            throw new InvalidOperationException(
+                "The widescreen camera clamp pattern was not found.");
+        }
+
+        data[match + valueOffset] = (byte)(value & 0xFF);
+        data[match + valueOffset + 1] = (byte)((value >> 8) & 0xFF);
     }
 
     private static void FixSnesChecksum(byte[] rom)
@@ -260,12 +431,16 @@ internal static class ModRuntime
         }
     }
 
-    private static void WriteManifest(IReadOnlyList<string> patchIds, string sha256)
+    private static void WriteManifest(
+        IReadOnlyList<string> patchIds,
+        string? widescreenAspect,
+        string sha256)
     {
         Directory.CreateDirectory(AppPaths.GamesDirectory);
         var manifest = new PatchManifest
         {
             PatchIds = [.. patchIds],
+            WidescreenAspect = widescreenAspect,
             Sha256 = sha256,
         };
         File.WriteAllText(
@@ -287,10 +462,14 @@ internal static class ModRuntime
     private sealed class PatchManifest
     {
         public string[] PatchIds { get; set; } = [];
+        public string? WidescreenAspect { get; set; }
         public string Sha256 { get; set; } = string.Empty;
     }
 
-    internal static void EnsureBizHawkConfig(ControllerSettings settings, ControlScheme scheme)
+    internal static void EnsureBizHawkConfig(
+        ControllerSettings settings,
+        ControlScheme scheme,
+        string? libretroCorePath = null)
     {
         Directory.CreateDirectory(AppPaths.BizHawkUserDirectory);
 
@@ -319,7 +498,7 @@ internal static class ModRuntime
         config["AcceptBackgroundInputControllerOnly"] = true;
         config["LastWrittenFrom"] = "2.11.1";
         config["LastWrittenFromDetailed"] = "Version 2.11.1";
-        config["LibretroCore"] = AppPaths.BundledBsnesHdCorePath;
+        config["LibretroCore"] = libretroCorePath ?? AppPaths.BundledBsnesHdCorePath;
 
         // Render through the GPU (Direct3D 11), not BizHawk's GDI+ software blitter.
         // GDI+ CPU-scales the larger widescreen framebuffer to fullscreen every frame,

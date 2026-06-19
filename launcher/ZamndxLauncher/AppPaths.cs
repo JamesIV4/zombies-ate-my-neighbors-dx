@@ -45,6 +45,11 @@ internal static class AppPaths
         "bsnes_hd_beta_zamndx_libretro.dll");
     internal static readonly string AdjacentSourceRomPath = Path.Combine(BundleRoot, SourceRomName);
 
+    internal static string RuntimeBsnesHdCorePath(WidescreenAspectOption aspect) =>
+        Path.Combine(
+            RuntimeDirectory,
+            $"bsnes_hd_beta_zamndx_libretro_{aspect.CoreFileSuffix}.dll");
+
     internal static void ValidateBundle(bool requireBsnesHdCore)
     {
         var missing = new List<string>();

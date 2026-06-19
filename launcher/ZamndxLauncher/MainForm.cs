@@ -158,7 +158,9 @@ internal sealed class MainForm : Form
     {
         var active = RomPatchCatalog.Optional
             .Where(patch => _patches.IsEnabled(patch.Id) && RomPatchCatalog.IsAvailable(patch))
-            .Select(patch => patch.Name)
+            .Select(patch => patch.Id == RomPatchCatalog.WidescreenId
+                ? $"{patch.Name} ({WidescreenAspects.Normalize(_patches.WidescreenAspect).DisplayName})"
+                : patch.Name)
             .ToList();
 
         _patchSummary.Text = active.Count == 0
