@@ -1,13 +1,14 @@
 # Widescreen (optional feature) — plan & progress
 
-Status: **widescreen ROM hook is Mesen-stable, including level-edge clamps and
-level-load off-map black fill.** `mesen_ws_verify.lua`, `mesen_offmap_black_verify.lua`,
-and the level 2 load-state probe all pass with `failures=0`. The build fills **10 strip
+Status: **widescreen ROM hook is Mesen-stable, including level-edge clamps and a
+gameplay-only off-map black fill.** `mesen_ws_verify.lua`, `mesen_offmap_black_verify.lua`,
+and `mesen_black_fix_verify.lua` all pass with `failures=0`. The build fills **10 strip
 columns per side** (about 80 px), clamps the horizontal camera 8 tiles inside each edge,
-and uses an opaque black BG1 tile for true off-map strip columns. The gather is
-incremental and now goes idle after post-scroll catch-up, so the steady-state cost is
-much lower than the earlier full-refill attempt. Final bsnes-hd visual recheck is still
-the next human-facing validation step.
+and paints true off-map strip columns with an opaque black BG1 tile **calibrated to the
+real gameplay palette/VRAM** (char base `$5000`, CGRAM `$08`, free tile `$27F` — see §6
+bug 9). The gather is incremental and now goes idle after post-scroll catch-up, so the
+steady-state cost is much lower than the earlier full-refill attempt. Final bsnes-hd
+visual recheck is still the next human-facing validation step.
 
 ---
 
@@ -104,8 +105,8 @@ widescreen strip would cross a horizontal level edge.
 
 ### Routine + memory layout
 
-Routine lives in free ROM at **`$8F:CC00`** (1696 free bytes before the reserved black
-column/tile data; 1401 used, 295 free). Scratch lives
+Routine lives in free ROM at **`$8F:CC00`** (1760 free bytes before the reserved black
+tile data; 1204 used, 556 free). Scratch lives
 in free high WRAM (the level map ends ~`$7F:8F00`, so `$7F:F000+` is free; the DX mailbox
 at `$7F:FFF0` is already proven free):
 
@@ -117,25 +118,28 @@ $7F:F540-$F567   VRAMDEST    20 words ($FFFF = no pending upload / consumed by d
 $7F:FFF0-$FFF9   (DX analog mailbox)
 ```
 
-Reserved ROM data lives at `$8F:D2A0-$8F:D2FF`: a 64-byte black tilemap column and a
-32-byte opaque black 4bpp tile. The tile uses pixel color `$A` in palette 2; in the
-tested palettes CGRAM color `$2A` is black.
+Reserved ROM data lives at `$8F:D2E0-$8F:D2FF`: a 32-byte opaque black 4bpp tile (solid
+pixel color index `8`). During gameplay the off-map cell uses palette 0, and CGRAM `$08`
+(palette 0, color index 8) is black on every level tested — color index 8 is the engine's
+"black" (black in BG palettes 0,2,3,4,5 and every sprite palette). See §6 bug 9 for how
+this was (mis)calibrated before.
 
 ### Per-column pipeline (for a gathered column)
 For strip column offset `off` (`-10..-1` and `+32..+41`) and world-col
 `mc = camera_col + off`:
-1. **gather:** walk 32 rows from `$7F:( camrow*$160 + mc*2 )` stepping `+$160`; apply
-   priority `(cell & $1FF) < $DC → OR $2000`; store ring-ordered into
-   `colbuf[ ($1B7A + row) & 31 ]`. If `mc` is outside the map, fill the column
-   with opaque black tilemap cell `$2BFF`.
+1. **gather:** walk 32 rows from `$7F:( camrow*stride + mc*2 )` stepping by the live row
+   stride `$B2`; apply priority `(cell & $1FF) < $DC → OR $2000`; store ring-ordered into
+   `colbuf[ ($1B7A + row) & 31 ]`. If `mc` is outside the map, fill the column with the
+   opaque black tilemap cell `$227F` (priority | palette 0 | tile `$27F`).
 2. **dest:** `VRAMDEST = $1B7E + $80:9D77[(($1B76 + off) & 63)*2]`.
 3. **enqueue (vblank):** queue entry `src=colbuf, bank=$7F, vram=VRAMDEST,
    vmain=$0081 (vertical +32), size=$0040`; then `VRAMDEST := $FFFF` (consumed).
 
-During visible level-load states (`$0E != 2` but `$0D25 != 0`), the gather is not active.
-The enqueue hook therefore queues the ROM black column directly for any off-map strip
-columns, and also uploads the custom black tile graphics. This handles level starts
-where the camera is already past the eventual widescreen clamp.
+The off-map black fill is **gameplay-only** (`$0E == 2 && $0D25 != 0`). The gather writes
+the `$227F` cells (step 1), and the enqueue uploads the black tile graphics to VRAM
+`$77F0` on full-refill frames (level start / warp); tile `$27F` is an unused BG1 slot the
+game never DMAs over, so it persists between refills. Nothing black-related runs during
+loading/menu states, so the loading-screen text is never touched.
 
 ### Camera edge clamp
 
@@ -153,8 +157,9 @@ than the 10-column BG fill width so the clamp does not hide real level data:
 
 On level 1, Mesen reports `$00B8=$0480`, so the right widescreen clamp is `$0440`.
 Vertical camera bounds are unchanged. If a level starts with the camera already past
-one of these margins, any truly off-map strip columns are painted with opaque black
-BG1 cell `$2BFF` rather than repeating edge data or leaving stale VRAM.
+one of these margins (level 2 starts at the very left edge), any truly off-map strip
+columns are painted with opaque black BG1 cell `$227F` rather than repeating edge data
+or leaving stale VRAM.
 
 ### Sprites (OAM X-cull relax)
 
@@ -273,7 +278,7 @@ Real bsnes-hd visual confirmation is still required.
 | Camera (pixels) | `$1B6A` / `$1B6C` |
 | Camera max X | `$00B8` (`$0480` on level 1) |
 | Guards | `$0E` game-state (`2` = in a level); `$0D25` player-active (`0` during level load) |
-| Off-map black | BG1 cell `$2BFF` = priority + palette 2 + tile `$3FF`; custom tile graphics at VRAM `$4FF0`; CGRAM `$2A` is black in tested states |
+| Off-map black (gameplay only) | BG1 cell `$227F` = priority + palette 0 + tile `$27F`; solid color-index-8 tile graphics uploaded to VRAM `$77F0` (gameplay char base `$5000` + `$27F*16`); CGRAM `$08` is black on every level tested |
 
 ---
 
@@ -324,22 +329,41 @@ The first builds crashed/hung. Diagnosed entirely with **Mesen headless tracing*
    It also could not help when a level started with the camera already past the clamp
    (level 2 does this), because no left/right scroll check had run yet. The final margin
    is 8 tiles on both sides (`$0040` left, `$0040` right), so level 1 clamps at
-   `$0040..$0440` when `$00B8=$0480`. True off-map strip columns are filled with
-   opaque black cell `$2BFF`; visible load states queue a ROM black column directly so
-   the level 2 load frame is black from frame 1.
-9. **Transparent black was not enough.** Plain cell `$0000` can let lower-priority BG2
-   data show through, which is why level-load garbage could still be visible. The patch
-   reserves tile `$3FF`, uploads an all-pixel-color-`$A` 4bpp tile to VRAM `$4FF0`, and
-   uses priority/palette cell `$2BFF` for black columns. The load-state probe verifies
-   both the tile graphics and every off-map tilemap row.
+   `$0040..$0440` when `$00B8=$0480`. True off-map strip columns are filled with the
+   opaque black cell `$227F` during gameplay (level 2 starts already at the left edge,
+   so its left strips are off-map from frame 1).
+9. **Transparent black was not enough.** Plain cell `$0000` lets lower-priority BG2
+   data show through, so off-map garbage stayed visible. Black therefore needs an
+   *opaque* tile: a solid tile referenced with the priority bit so BG1 wins over BG2.
+   (Choosing the right tile + palette is bug 11 — the first attempt got both wrong.)
 10. **Idle gather cost.** Even after the incremental rewrite, the hook kept trickling
    columns forever while the camera was tile-stationary. `REFDEBT` now keeps trickle
    alive only long enough to refresh every strip column once after movement, then skips
    column work until the camera crosses another tile row/column.
+11. **Off-map "black" was green, and the load-frame fill broke the loading text.** The
+   first opaque-black attempt was calibrated from the user's level-2 **loading-text**
+   savestate: it assumed BG1 char base `$1000` (tile `$3FF` → VRAM `$4FF0`) and palette 2
+   color `$A` (`CGRAM $2A`). Both are wrong for **gameplay**: gameplay `$210B=$25` so BG1
+   char base is `$5000` (verified via BG2/BG3 cross-check that Mesen's `chrAddress` is in
+   *words*), and once the level palette loads `CGRAM $2A` is `62EB` (teal), not black —
+   so the off-map tile rendered transparent (tile `$3FF` is the engine's blank cell) and
+   the green backdrop (`CGRAM $00 = 29C1`) showed through. Worse, to make the load frame
+   black the enqueue uploaded that tile + queued black columns **during non-gameplay
+   states** (`$0E != 2`), which is exactly the loading-text screen → it clobbered the
+   font at `$4FF0` and the text tilemap. Fix: (a) **gameplay-calibrated** black — solid
+   color-index-8 tile (`CGRAM $08` is black on every level: index 8 is black in BG
+   palettes 0,2,3,4,5 and all sprite palettes) hosted at a verified-free, never-referenced
+   BG1 slot (`$27F` → VRAM `$77F0`), cell `$227F`; (b) **gameplay-only gating** — all
+   black-fill now lives behind the `$0E==2 && $0D25!=0` guard, so loading/menu VRAM is
+   never touched. `mesen_black_fix_verify.lua` confirms off-map cells are `$227F`, the
+   tile at `$77F0` is solid color-8, `CGRAM $08==0`, and **zero** bank-`$8F` (black-fill)
+   DMAs occur across 127 non-gameplay drains. *Lesson: calibrate display constants
+   (palette/char-base/VRAM) from the **gameplay** state, never a load/menu savestate.*
 
 Result: the BG hook is data-correct across all 20 columns (`mesen_ws_verify.lua`
 `failures=0`), `$CE` returns to zero, horizontal camera edges stay inside the real
-level map, and true off-map load/gameplay columns are opaque black.
+level map, and true off-map columns are opaque black during gameplay while loading/menu
+screens are left untouched.
 
 ---
 
@@ -355,9 +379,12 @@ level map, and true off-map load/gameplay columns are opaque black.
 | `tools/diagnostics/mesen_ws_verify.lua` | BG data-correctness check (colbuf ↔ map ↔ VRAM). |
 | `tools/diagnostics/mesen_camera_bounds_probe.lua` | Natural-route camera trace; confirms left clamp reaches `$0040` instead of stock `$0000`. |
 | `tools/diagnostics/mesen_camera_clamp_verify.lua` | Controlled right-edge proof; forces camera attempts at `$043F/$0440` and confirms `$0440` blocks when `$00B8=$0480`. |
-| `tools/diagnostics/mesen_offmap_black_verify.lua` | Verifies true off-map strip columns upload opaque black `$2BFF` to colbuf and VRAM on both horizontal edges. |
-| `tools/diagnostics/mesen_level2_load_probe.lua` | Loads the user level-2 savestate and verifies load-state off-map columns plus the custom black tile graphics. |
-| `tools/diagnostics/mesen_blank_tile_scan.lua` | Palette/tile scan used to prove `$0000` was transparent and that palette 2 color `$A` is black. |
+| `tools/diagnostics/mesen_offmap_black_verify.lua` | Verifies true off-map strip columns upload opaque black `$227F` to colbuf and VRAM on both horizontal clamped edges (level 1). |
+| `tools/diagnostics/mesen_gameplay_black_probe.lua` | **Gameplay** black calibration: plays the level-2 savestate (or boots to level 1, `MODE`) forward into settled gameplay and dumps CGRAM, BG char bases, and free/unused BG1 tile slots. Found char base `$5000`, `CGRAM $08` black, free tile `$27F`. |
+| `tools/diagnostics/mesen_black_fix_verify.lua` | End-to-end fix check: off-map cells `$227F` + solid color-8 tile at `$77F0` + `CGRAM $08==0` during gameplay, **and** zero bank-`$8F` black-fill DMAs across all non-gameplay (loading) drains. |
+| `tools/diagnostics/_scan_bgnba.py` | ROM scan for `$2105/$210B/$210D/$2107` writes (found gameplay `$210B=$25` → BG1 char base `$5000`). |
+| `tools/diagnostics/mesen_level2_load_probe.lua` | *(superseded)* Loaded the user level-2 savestate to verify the old load-state black fill — that path was removed (it clobbered the loading text). |
+| `tools/diagnostics/mesen_blank_tile_scan.lua` | *(superseded — sampled the load screen)* Palette/tile scan that first (mis)concluded palette 2 color `$A` was black; see §6 bug 11. |
 | `tools/diagnostics/mesen_sprite_probe.lua` | Counts sprites in the strip X-ranges (stock 0 vs patched >0). |
 | `tools/diagnostics/mesen_oam_writers.lua` | Write-callback on the OAM shadow → every OAM-writer PC (found the one engine). |
 | `tools/diagnostics/mesen_cull_trace.lua` | Exec-callback at an engine point → per-object-type screen-region histogram (found type `$05` never in strips). |
@@ -433,9 +460,13 @@ anywhere). Walk around and watch the leading edges fill with correct terrain.
 - [x] **Horizontal level-edge clamp** - stock camera bounds now clamp earlier with
       tuned margins (`$0040` left, `$00B8-$0040` right), and true
       off-map strip columns upload opaque black `$2BFF` instead of stale VRAM.
-- [x] **Level-load off-map black** - the level 2 savestate now verifies off-map strip
-      cells are `$2BFF` from frame 1, with black tile graphics present at VRAM `$4FF0`.
-- [ ] **bsnes-hd visual confirmation for level edges** - approach the left/right level
+- [x] **Off-map black (gameplay), loading text intact** - off-map strip cells are `$227F`
+      (priority|pal0|tile `$27F`) backed by a solid color-8 tile at VRAM `$77F0`; calibrated
+      to the real gameplay state (char base `$5000`, `CGRAM $08` black). All black-fill is
+      gameplay-only, so the loading-text screen is no longer clobbered. `mesen_black_fix_verify.lua`
+      passes (off-map black + 0 black-fill DMAs during loading). *(Replaces the earlier
+      load-screen calibration that rendered green and broke the level-2 loading text — §6 bug 11.)*
+- [ ] **bsnes-hd visual confirmation for level edges + loading text** - approach the left/right level
       edges and confirm the camera clamp looks clean in standalone bsnes-hd.
 - [ ] **Tuning** — `SPRITE_MARGIN`/`NSTRIP`/`TRICKLE` if needed; alignment.
 - [ ] **BG2** — the 32×32 second layer may need its own pass if it shows strip garbage.

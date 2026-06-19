@@ -9,7 +9,7 @@ local out = io.open("s:/Repos/zombies-ate-my-neighbors-dx/mesen-offmap-black.txt
 
 local N = 10
 local COLBUF = 0xF000
-local BLACK_CELL = 0x2BFF
+local BLACK_CELL = 0x227F   -- priority | palette 0 | tile $27F (gameplay-calibrated black)
 local RIGHT_MARGIN = 0x0040
 local phase = "left"
 local phase_frame = nil

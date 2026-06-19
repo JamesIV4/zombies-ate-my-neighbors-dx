@@ -1,5 +1,6 @@
 *.sfc
 mesen-*.txt
+mesen-*.log
 __pycache__/
 *.pyc
 mod/zamndx-controller-config.lua

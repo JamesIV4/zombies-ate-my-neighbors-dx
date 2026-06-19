@@ -97,19 +97,24 @@ CAMERA_LEFT_MARGIN_TILES = 8
 CAMERA_RIGHT_MARGIN_TILES = 8
 CAMERA_LEFT_MARGIN = CAMERA_LEFT_MARGIN_TILES * 8
 CAMERA_RIGHT_MARGIN = CAMERA_RIGHT_MARGIN_TILES * 8
-# Opaque black off-map tile: BG1 char base is $1000 words, tile $3FF is outside the
-# observed level tile range. The tile data uses pixel color $A, and palette 2 color
-# $A (CGRAM $2A) is black in the level-loading/gameplay palettes. Priority keeps BG2
-# garbage from showing through.
-BLACK_TILE_INDEX = 0x03FF
-BLACK_CELL = 0x2000 | (2 << 10) | BLACK_TILE_INDEX
-BLACK_TILE_VRAM = 0x1000 + BLACK_TILE_INDEX * 16
-BLACK_COLUMN_SRC = 0xD2A0
+# Opaque black off-map tile (GAMEPLAY only). Calibrated against real level-1 AND level-2
+# gameplay in Mesen (mesen_gameplay_black_probe.lua): during gameplay $210B=$25, so BG1
+# tile graphics live at char base word $5000 (constant across gameplay levels). BG1 tile
+# indices $200-$27F are unused on both levels (all-zero graphics, never referenced by the
+# map), so hosting a tile there overwrites nothing and turns no on-screen cell black. CGRAM
+# $08 (palette 0, color index 8) is black on both levels -- index 8 is the engine's "black"
+# (black in BG palettes 0,2,3,4,5 and every sprite palette). So the off-map cell is
+# priority|palette0|tile $27F and tile $27F is a solid color-8 fill.
+#   NOTE: the previous attempt sampled the level-2 LOADING screen (char base $1000, palette
+#   2 color $A == CGRAM $2A) -- both wrong for gameplay (different char base AND a non-black
+#   palette entry once the level palette loads), which is why the off-map area showed green.
+GAMEPLAY_BG1_CHARBASE = 0x5000        # words; BG1 tile-graphics base during gameplay ($210B=$25)
+BLACK_TILE_INDEX = 0x27F
+BLACK_CELL = 0x2000 | (0 << 10) | BLACK_TILE_INDEX                 # priority | palette 0 | tile $27F
+BLACK_TILE_VRAM = GAMEPLAY_BG1_CHARBASE + BLACK_TILE_INDEX * 16    # word $77F0 (no VRAM wrap)
 BLACK_TILE_SRC = 0xD2E0
-BLACK_COLUMN_FILE = (0x8F & 0x7F) * 0x8000 + (BLACK_COLUMN_SRC - 0x8000)
 BLACK_TILE_FILE = (0x8F & 0x7F) * 0x8000 + (BLACK_TILE_SRC - 0x8000)
-BLACK_COLUMN_BYTES = bytes([BLACK_CELL & 0xFF, BLACK_CELL >> 8] * 32)
-BLACK_TILE_BYTES = bytes(([0x00, 0xFF] * 8) + ([0x00, 0xFF] * 8))
+BLACK_TILE_BYTES = bytes(([0x00] * 16) + ([0x00, 0xFF] * 8))       # 4bpp solid color index 8
 OBJECT_ACTIVATION_MARGIN = SPRITE_MARGIN
 VICTIM_ACTIVATION_MARGIN = SPRITE_MARGIN
 TYPE05_SLOT_FIRST = 0x185E
@@ -132,9 +137,6 @@ VRAMDEST = SB + 0x40      # NSLOT words ($FFFF = no pending upload / already con
 
 # enqueue runs with DB=0; it reaches $7F scratch via long addressing
 SIDX_L = 0x7F0000 + SIDX
-CAMCOL_L = 0x7F0000 + CAMCOL
-MC_L = 0x7F0000 + MC
-MCX2_L = 0x7F0000 + MCX2
 FULLF_L = 0x7F0000 + FULLF
 VD_L = 0x7F0000 + VRAMDEST
 
@@ -490,12 +492,8 @@ enqueue_entry:
     LDA #$00
     PHA
     PLB                         ; DB = 0
-    REP #$20
-    JSR e_black_tile
-    JSR e_load_black_cols
-    SEP #$20
-    LDA $0E
-    CMP #$02
+    LDA $0E                     ; gameplay guard FIRST: black-fill must never run during
+    CMP #$02                    ; loading/menu states (it would clobber the loading text)
     BNE e_bail
     LDA $0D25
     BNE e_run
@@ -503,6 +501,7 @@ e_bail:
     JMP e_exit
 e_run:
     REP #$20
+    JSR e_black_tile            ; gameplay-only (guarded above): refresh black tile on refill
     LDA #$0000
     STA ${SIDX_L:06X}
 e_loop:
@@ -569,17 +568,13 @@ e_exit:
 e_drain_skip:
     JML $809ECE
 
+; Refresh the off-map black tile graphics in VRAM. Called only from inside the gameplay
+; path (so it never touches the loading-text / menu VRAM that the previous version clobbered).
+; Uploads on full-refill frames only (level start / warp); the tile lives in an unused BG1
+; slot ($27F) the game never DMAs over, so it persists between refills. DB=0; M=16.
 e_black_tile:
-    LDA $00000E
-    AND #$00FF
-    CMP #$0002
-    BNE e_bt_active             ; level-load/menu-like visible states need the tile now
     LDA ${FULLF_L:06X}
-    BEQ e_bt_done               ; during gameplay, the tile only needs refresh on refill
-e_bt_active:
-    LDA $000D25                 ; active during gameplay and some visible level-load states
-    AND #$00FF
-    BEQ e_bt_done
+    BEQ e_bt_done               ; only on full refill (level start / warp / stride change)
     BIT $26
     BVS e_bt_done
     LDX $CE
@@ -599,84 +594,6 @@ e_bt_active:
     INX
     STX $CE
 e_bt_done:
-    RTS
-
-e_load_black_cols:
-    LDA $00000E
-    AND #$00FF
-    CMP #$0002
-    BEQ e_lbc_done              ; gameplay gather/enqueue handles off-map strips
-    LDA $000D25
-    AND #$00FF
-    BEQ e_lbc_done
-    LDA $001B6A
-    LSR
-    LSR
-    LSR
-    STA ${CAMCOL_L:06X}
-    LDA #$0000
-    STA ${SIDX_L:06X}
-e_lbc_loop:
-    LDA ${SIDX_L:06X}
-    CMP #${NSLOT:04X}
-    BCS e_lbc_done
-    CMP #${NSTRIP:04X}
-    BCC e_lbc_left
-    CLC
-    ADC #${32 - NSTRIP:04X}
-    BRA e_lbc_haveoff
-e_lbc_left:
-    SEC
-    SBC #${NSTRIP:04X}
-e_lbc_haveoff:
-    STA ${MC_L:06X}             ; temporary: signed strip offset
-    CLC
-    ADC ${CAMCOL_L:06X}
-    BMI e_lbc_black
-    ASL
-    CMP $0000B2
-    BCC e_lbc_next
-e_lbc_black:
-    JSR e_queue_black_col
-e_lbc_next:
-    LDA ${SIDX_L:06X}
-    INC
-    STA ${SIDX_L:06X}
-    BRA e_lbc_loop
-e_lbc_done:
-    RTS
-
-e_queue_black_col:
-    LDX $CE
-    CPX #$002E
-    BCC e_qbc_room
-    RTS
-e_qbc_room:
-    PHX
-    LDA ${MC_L:06X}             ; signed strip offset from e_lbc_haveoff
-    CLC
-    ADC $001B76
-    AND #$003F
-    ASL
-    TAX
-    LDA $809D77,X
-    CLC
-    ADC $001B7E
-    STA ${MCX2_L:06X}
-    PLX
-    LDA #${BLACK_COLUMN_SRC:04X}
-    STA $1B84,X
-    LDA #$008F
-    STA $1BB4,X
-    LDA ${MCX2_L:06X}
-    STA $1BE4,X
-    LDA #$0081
-    STA $1C14,X
-    LDA #$0040
-    STA $1C44,X
-    INX
-    INX
-    STX $CE
     RTS
 
 ; ================= TYPE-$05 RENDER-LIST RELAX (items/survivors) =================
@@ -885,9 +802,9 @@ wsr_continue:
 
 def main() -> int:
     code, labels = asm.assemble(SOURCE, ORG)
-    limit = BLACK_COLUMN_SRC - (ORG & 0xFFFF)  # reserve $8F:D2A0..D2FF for black column/tile data
+    limit = BLACK_TILE_SRC - (ORG & 0xFFFF)  # reserve $8F:D2E0..D2FF for the black tile graphics
     if len(code) > limit:
-        raise SystemExit(f"routine too large: {len(code)} bytes > {limit} free before black data")
+        raise SystemExit(f"routine too large: {len(code)} bytes > {limit} free before black tile data")
 
     base = (ROOT / build.DEFAULT_ROM).read_bytes()
     rom = build.patch_rom(base)
@@ -905,7 +822,6 @@ def main() -> int:
     patch(0x268B, "AD 6A 1B F0", labels["ws_scroll_left_guard"])   # $80:A68B
     patch(0x270A, "AD 6A 1B C5", labels["ws_scroll_right_guard"])  # $80:A70A
     rom[ROUTINE_FILE:ROUTINE_FILE + len(code)] = code
-    rom[BLACK_COLUMN_FILE:BLACK_COLUMN_FILE + len(BLACK_COLUMN_BYTES)] = BLACK_COLUMN_BYTES
     rom[BLACK_TILE_FILE:BLACK_TILE_FILE + len(BLACK_TILE_BYTES)] = BLACK_TILE_BYTES
 
     # Replace JSR $BCE2 / JSR $BC23 in the sprite engine with one long helper that
