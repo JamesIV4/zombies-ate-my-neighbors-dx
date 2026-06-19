@@ -42,7 +42,7 @@ internal static class RomPatchCatalog
             FileName: "widescreen.ips",
             Mandatory: false,
             DefaultEnabled: true,
-            ExpectedSha256: "53978CB3067E6348617768A1216580C426C44B3398324E60C5B0E62E5B423C72"),
+            ExpectedSha256: "6EB9C5526FE4E138915E96B9EA65C77431E6B1F99B472FCCA2FC8A5F2A73E7EF"),
         new RomPatch(
             Id: "bloody",
             Name: "Bloody Disgusting Edition",

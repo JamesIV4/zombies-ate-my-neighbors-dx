@@ -4,7 +4,7 @@ local wram = emu.memType.snesWorkRam
 local state_path = "C:/Users/james/OneDrive/Documents/MesenCE/SaveStates/Zombies Ate My Neighbors DX Widescreen_1.mss"
 local out = io.open("s:/Repos/zombies-ate-my-neighbors-dx/mesen-savestate-sprite-cull.txt", "w")
 
-local WS_SPRITE_CULL = 0x8FD004
+local WS_SPRITE_CULL = 0x80FF68
 local SPRITE_MARGIN = 0x50
 
 local loaded = false

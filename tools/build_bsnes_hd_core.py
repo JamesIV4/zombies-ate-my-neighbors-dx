@@ -24,6 +24,12 @@ VALUE_RECORD_SIZE = 16
 
 # The user requested "layers 2 and 4 always on"; the companion "1 and 4 off"
 # appears to repeat layer 4, so this uses the coherent 1/3 off, 2/4 on layout.
+#
+# The CPU entries are a ZAMN-DX performance tweak: BizHawk's libretro bridge only
+# feeds the core its option *defaults*, so a mild overclock and the Fast Math hack are
+# baked in here to take pressure off sprite-heavy widescreen scenes. The value IDs come
+# straight from target-libretro/libretro_core_options.h (overclock "10".."400" in 10%
+# steps, default "100"; fastmath "ON"/"OFF", default "OFF").
 DEFAULTS = {
     "bsnes_mode7_wsMode": "all",
     "bsnes_mode7_wsbg1": "off",
@@ -31,6 +37,8 @@ DEFAULTS = {
     "bsnes_mode7_wsbg3": "off",
     "bsnes_mode7_wsbg4": "on",
     "bsnes_mode7_wsobj": "unsafe",
+    "bsnes_cpu_overclock": "130",   # 130% CPU overclock (stock 100%)
+    "bsnes_cpu_fastmath": "ON",     # enable CPU Fast Math (stock OFF)
 }
 
 
@@ -104,18 +112,21 @@ class PeImage:
             index = self.data.find(key_pointer, start)
             if index < 0:
                 break
+            start = index + 1
+            # The key string's VA also appears as an immediate in the var.key = "..."
+            # reader code, so disambiguate structurally rather than by description text
+            # (CPU options are not "Widescreen ..."): only the real v1
+            # retro_core_option_definition record has its default_value pointer
+            # RECORD_SIZE-8 after the key AND that default listed among its own values.
             try:
                 desc = self.read_c_string(struct.unpack_from("<Q", self.data, index + 8)[0])
-                first_value = self.read_c_string(
-                    struct.unpack_from("<Q", self.data, index + VALUES_OFFSET)[0])
+                values = self.option_values(index)
                 current_default = self.read_c_string(
                     struct.unpack_from("<Q", self.data, index + DEFAULT_VALUE_OFFSET)[0])
-            except (ValueError, UnicodeDecodeError):
-                start = index + 1
+            except (ValueError, UnicodeDecodeError, struct.error):
                 continue
-            if desc.startswith("Widescreen") and first_value and current_default:
+            if desc and values and current_default in values:
                 candidates.append(index)
-            start = index + 1
 
         if len(candidates) != 1:
             raise ValueError(f"expected one option record for {key}, found {len(candidates)}")

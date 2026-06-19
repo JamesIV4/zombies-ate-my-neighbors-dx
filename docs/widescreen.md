@@ -81,11 +81,16 @@ The patched bsnes-hd defaults are:
 | `bsnes_mode7_wsbg2` | `on` |
 | `bsnes_mode7_wsbg3` | `off` |
 | `bsnes_mode7_wsbg4` | `on` |
+| `bsnes_cpu_overclock` | `130` (130%, stock `100`) |
+| `bsnes_cpu_fastmath` | `ON` (stock `OFF`) |
 
 The source note for layer settings repeated layer 4 in both the off/on lists; the
-current bundled core uses the coherent 1/3 off, 2/4 on configuration. Update the
-tracked DLL deliberately with `tools/build_bsnes_hd_core.py` if that calibration
-changes.
+current bundled core uses the coherent 1/3 off, 2/4 on configuration. The CPU
+overclock and Fast Math defaults are a performance tweak (BizHawk only feeds the core
+its option defaults, so they cannot be set from a UI): the 130% overclock gives the
+emulated SNES CPU headroom in sprite-heavy widescreen scenes, and Fast Math removes
+the multiply/divide delays. Update the tracked DLL deliberately with
+`tools/build_bsnes_hd_core.py` if that calibration changes.
 
 ---
 
@@ -135,7 +140,8 @@ widescreen strip would cross a horizontal level edge.
 ### Routine + memory layout
 
 Routine lives in free ROM at **`$8F:CC00`** (1760 free bytes before the reserved black
-tile data; 1204 used, 556 free). Scratch lives
+tile data; 1177 used, 583 free), plus a 14-byte same-bank sprite-cull helper in the
+free pocket at `$80:FF68`. Scratch lives
 in free high WRAM (the level map ends ~`$7F:8F00`, so `$7F:F000+` is free; the DX mailbox
 at `$7F:FFF0` is already proven free):
 
@@ -195,11 +201,13 @@ or leaving stale VRAM.
 The OAM-build engine (`$80:BA6F-$BDC9`) only writes a sprite to the OAM shadow if its
 screen-X is in `[-15, 255]`; anything further into a strip is culled. Four identical
 cull sites (`$80:BA74/$BAE4/$BB5A/$BBD7`) each do `CMP #$0100 / BCC draw / CMP #$FFF1 /
-BCC cull / <set X-high bit>`. Each is replaced with `JSL ws_sprite_cull` (a helper in
-the same free ROM) that widens the visible range to `[-SPRITE_MARGIN, 255+SPRITE_MARGIN]`
-(=±80 px, matching the BG strips) and returns draw/cull + whether the X-high bit is
-needed; the site keeps its **own** original set-high bytes (sites 1-3 `ORA`, site 4
-`EOR`) so a strip sprite gets its X-high bit and bsnes-hd renders it in the strip.
+BCC cull / <set X-high bit>`. The optimized patch keeps the stock on-screen fast path
+exactly shaped as `CMP #$0100 / BCC draw`, then uses a same-bank `JSR $FF68` helper only
+for X values outside the 4:3 screen. That helper widens the visible range to
+`[-SPRITE_MARGIN, 255+SPRITE_MARGIN]` (=±80 px, matching the BG strips) and returns
+carry set for true culls. The site keeps its **own** original set-high bytes (sites
+1-3 `ORA`, site 4 `EOR`) so a strip sprite gets its X-high bit and bsnes-hd renders it
+in the strip. This avoids the old `JSL` cost on every ordinary on-screen sprite tile.
 
 **Display-only and no aggro change:** this only changes which *already-active* actors
 get an OAM entry — an enemy off the right edge already has its AI running; we just let
@@ -223,20 +231,16 @@ Implemented fix:
   `CMP #$00E0` (`$0090 + SPRITE_MARGIN`). This changes the horizontal activation
   and deactivation range from about `[-15,271]` to about `[-95,351]`, covering the
   80 px widescreen strips while leaving the vertical gate unchanged.
-- `$80:C91C` scanner cadence changed from `($20 & 3) == 0` to every task wake. The
-  task still yields normally, but mid-cycle saves no longer wait several ticks before
-  the widened pass can pick up a strip object.
+- `$80:C91C` scanner cadence stays stock: `($20 & 3) == 0`. Earlier builds ran this
+  more often to reduce edge pop-in, but stock cadence is cheaper and works once the
+  display-side culls are tightened.
 - `$81:823C` victim/neighbor definition scanner X gate widened from `CMP #$00A0`
   to `CMP #$00F0` (`$00A0 + SPRITE_MARGIN`). Stock wakes left-side victims at about
   `screenX=-31`; the widened gate covers about `screenX=-111` while leaving the
   vertical gate unchanged.
-- User savestate verification now shows type `$0C` active/emitting left-strip OAM
-  from frame 1 at `objScreen=(-45,40)` / `tileX=-51`; before this patch it first
-  emitted strip tiles around frame 19 at `objScreen=(-9,40)`.
-- The later neighbor save now shows a type `$01` neighbor rendered in the left strip
-  by frame 10 at `screenX=-63`. A DP-aware scanner proof (`mesen_savestate_victim_gate_verify.lua`)
-  resets only emulator RAM and catches the same cheerleader candidate at `screen=(-79,74)`,
-  then initialized at `screen=(-77,74)`.
+- User savestate verification showed type `$0C` item/map-object OAM and type `$01`
+  neighbor OAM can render in the left strip once the stock-cadence scanner reaches
+  them; the final OAM software cull still decides per-tile visibility.
 
 The older type-`$05` render-list relax remains in the current build as a synthetic
 display-only bypass for active unlisted slots, but the real saved-scene fixes are the
@@ -253,10 +257,16 @@ callbacks; tools below). Findings:
   second renderer. Entry is `$80:BD1F` (per-frame, called from the main loop), reached
   by fall-through, not `JSR`/`JSL`.
 - **The pipeline:** objects live in a `$1B5E` linked list → builder `$80:BCEA` walks it,
-  culls each at `screenX/Y ∈ [-128, 384)` (`SBC $1B6A/$1B6C` / `CMP #$FF80` / `CMP #$0180`)
-  and flattens survivors into the render array `$137E` → engine `$BD1F` iterates `$137E`,
-  per-object setup `$80:BD79` computes `screenX = objX - $1B6A`, then the draw loops
-  (the 4 patched per-tile culls) emit OAM.
+  culls each into the render array `$137E`, then engine `$BD1F` iterates `$137E`.
+  Stock uses `screenX/Y ∈ [-128, 384)` here; the widescreen shim keeps the stock
+  horizontal render-list range `[-128, 384)` (it already covers the 80 px strips plus
+  ~48 px of sprite overhang) while leaving the stock vertical range unchanged. An
+  earlier optimization narrowed this to `[-96, 352)` (strip + one 16 px tile) and
+  clipped wide neighbors/enemies/items at the strip edge — their anchor fell outside
+  the gate while their leading tiles were still visible — so the gate was restored to
+  the stock margin (`RENDER_X_MARGIN = SPRITE_MARGIN + 48`). Per-object setup
+  `$80:BD79` then computes `screenX = objX - $1B6A`,
+  and the draw loops (the 4 patched per-tile culls) emit or cull final OAM.
 - **The actual gate (empirical).** Hooking the setup `$BD79` and the builder `$BCEA` and
   bucketing by object type (`$0E,X`): types `$00/$01/$03` (player/enemies/projectiles)
   reach both in the strips; **type `$05` reaches them only on-screen (0 in either strip,
@@ -388,6 +398,18 @@ The first builds crashed/hung. Diagnosed entirely with **Mesen headless tracing*
    tile at `$77F0` is solid color-8, `CGRAM $08==0`, and **zero** bank-`$8F` (black-fill)
    DMAs occur across 127 non-gameplay drains. *Lesson: calibrate display constants
    (palette/char-base/VRAM) from the **gameplay** state, never a load/menu savestate.*
+12. **Many-sprite slowdown from widened OAM culls.** The first sprite-strip patch sent
+   every sprite tile through a long `JSL` helper, including ordinary on-screen sprites.
+   Final fix: keep the stock `CMP #$0100 / BCC draw` fast path at all four cull sites,
+   and call a 14-byte same-bank helper at `$80:FF68` only for offscreen/strip candidates.
+   The per-tile OAM cull (`SPRITE_MARGIN`=80) bounds what is actually drawn. The
+   active-actor render-list X range is kept at the stock `[-128, 384)` margin
+   (`RENDER_X_MARGIN = SPRITE_MARGIN + 48`): it already covers the 80 px strips with
+   ~48 px of sprite overhang, so wide actors are not dropped from `$137E` while their
+   leading tiles are still on the strip edge. (A brief `[-96, 352)` narrowing clipped
+   those actors and was reverted — the render-list walk is cheap, so there is no point
+   trimming it below the OAM cull's needs.) The map-object scanner cadence is back to
+   stock (`$20 & 3`).
 
 Result: the BG hook is data-correct across all 20 columns (`mesen_ws_verify.lua`
 `failures=0`), `$CE` returns to zero, horizontal camera edges stay inside the real
@@ -483,15 +505,14 @@ and render sprites anywhere.
       (§4 *Sprites*); Mesen-confirmed the strip X-ranges go from 0 (stock) to non-zero
       (patched). Display-only. User-confirmed in bsnes-hd.
 - [x] **Sprites (items & neighbors / spawners)** - widened the `$80:C948`
-      map-object X activation/deactivation gate to `$00E0`, made that scanner run
-      each task wake, and widened the `$81:823C` victim scanner X gate to `$00F0`.
-      User savestates now emit type `$0C` item/map-object OAM from frame 1 and
-      type `$01` neighbor OAM in the left strip by frame 10 at `screenX=-63`.
+      map-object X activation/deactivation gate to `$00E0`, kept that scanner at the
+      stock every-4-wakes cadence, and widened the `$81:823C` victim scanner X gate to `$00F0`.
+      The final OAM software cull remains active with a widened horizontal range.
 - [x] **bsnes-hd visual confirmation for items/neighbors** - user-confirmed both item
       and neighbor strip rendering in standalone bsnes-hd.
 - [x] **Horizontal level-edge clamp** - stock camera bounds now clamp earlier with
       tuned margins (`$0040` left, `$00B8-$0040` right), and true
-      off-map strip columns upload opaque black `$2BFF` instead of stale VRAM.
+      off-map strip columns upload opaque black `$227F` instead of stale VRAM.
 - [x] **Off-map black (gameplay), loading text intact** - off-map strip cells are `$227F`
       (priority|pal0|tile `$27F`) backed by a solid color-8 tile at VRAM `$77F0`; calibrated
       to the real gameplay state (char base `$5000`, `CGRAM $08` black). All black-fill is

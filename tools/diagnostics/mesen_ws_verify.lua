@@ -11,7 +11,7 @@ local N = 10
 local NSLOT = 2 * N
 local COLBUF = 0xF000
 local LASTTICK = 0xF52E
-local BLACK_CELL = 0x2BFF
+local BLACK_CELL = 0x227F
 local frame, gp = 0, nil
 local out = io.open("s:/Repos/zombies-ate-my-neighbors-dx/mesen-ws-verify.txt", "w")
 

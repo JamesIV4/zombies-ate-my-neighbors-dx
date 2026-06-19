@@ -49,7 +49,6 @@ internal static class ModRuntime
             WorkingDirectory = Path.GetDirectoryName(AppPaths.BundledBizHawkPath)!,
             UseShellExecute = false,
         };
-        startInfo.ArgumentList.Add("--gdi");
         startInfo.ArgumentList.Add("--fullscreen");
         startInfo.ArgumentList.Add("--chromeless");
         startInfo.ArgumentList.Add("--config");
@@ -321,6 +320,15 @@ internal static class ModRuntime
         config["LastWrittenFrom"] = "2.11.1";
         config["LastWrittenFromDetailed"] = "Version 2.11.1";
         config["LibretroCore"] = AppPaths.BundledBsnesHdCorePath;
+
+        // Render through the GPU (Direct3D 11), not BizHawk's GDI+ software blitter.
+        // GDI+ CPU-scales the larger widescreen framebuffer to fullscreen every frame,
+        // which bogs down weaker hardware even though the core itself runs fine. This
+        // must be set explicitly: a prior --gdi launch persists DispMethod=GdiPlus(1)
+        // into this config, so dropping the flag alone is not enough. BizHawk falls
+        // back D3D11 -> OpenGL -> GDI+ on its own if D3D11 is unavailable.
+        // EDispMethod: OpenGL=0, GdiPlus=1, D3D11=2.
+        config["DispMethod"] = 2;
 
         // The battery-save patch persists progress to SRAM. BizHawk only writes
         // SaveRAM to disk on a clean close by default, so flush it periodically

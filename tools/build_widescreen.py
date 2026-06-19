@@ -74,6 +74,8 @@ ORG = 0x8FCC00
 DISP_HOOK_FILE = 0x293F    # $80:A93F  PHD;LDA #$0000  (dispatcher entry)
 DRAIN_HOOK_FILE = 0x1E7B   # $80:9E7B  BIT $26;BVS $9ECE  (VRAM-queue drain)
 ROUTINE_FILE = (0x8F & 0x7F) * 0x8000 + (0xCC00 - 0x8000)  # 0x7CC00
+CULL_FAST_ORG = 0x80FF68
+CULL_FAST_FILE = (0x80 & 0x7F) * 0x8000 + (0xFF68 - 0x8000)
 
 # Strip columns filled per side. bsnes-hd renders a fixed number of extra columns
 # per side based on its aspect setting; NSTRIP must cover that. Cost is now bounded
@@ -114,6 +116,19 @@ BLACK_TILE_FILE = (0x8F & 0x7F) * 0x8000 + (BLACK_TILE_SRC - 0x8000)
 BLACK_TILE_BYTES = bytes(([0x00] * 16) + ([0x00, 0xFF] * 8))       # 4bpp solid color index 8
 OBJECT_ACTIVATION_MARGIN = SPRITE_MARGIN
 VICTIM_ACTIVATION_MARGIN = SPRITE_MARGIN
+OBJECT_SCAN_MASK = 0x0003      # stock cadence: every 4 task wakes
+# Render-list X gate. This decides which objects are flattened into $137E at all;
+# the per-tile OAM cull (SPRITE_MARGIN) still makes the final per-tile draw call.
+# It tests an object's ANCHOR X, but ZAMN actors are multi-tile (up to ~48px wide),
+# so the gate must keep any object whose anchor is up to one sprite-width OUTSIDE
+# the visible strip -- otherwise a wide neighbor/enemy/item is dropped from the
+# render list while its leading tiles are still on the strip edge (it pops out
+# early). Stock kept a 128px overhang around the 256px window; matching that here
+# means strip width + 48px. A too-small overhang (the earlier "+16" = one tile)
+# clipped wide actors at the strip edge. This wider gate only adds a few render-
+# list comparisons; it does not add sprite-draw cost (SPRITE_MARGIN bounds that).
+SPRITE_RENDER_OVERHANG = 48
+RENDER_X_MARGIN = SPRITE_MARGIN + SPRITE_RENDER_OVERHANG
 TYPE05_SLOT_FIRST = 0x185E
 TYPE05_SLOT_END = 0x1ADE       # one past $1ACA + $14
 RENDER_ARRAY_MAX = 0x40        # $137E..$13BD, 32 object pointers
@@ -611,9 +626,9 @@ wbr_loop:
     LDA $02,X
     SEC
     SBC $1B6A
-    CMP #$FF80
+    CMP #${(0x10000 - RENDER_X_MARGIN) & 0xFFFF:04X}
     BCS wbr_ycheck
-    CMP #$0180
+    CMP #${0x0100 + RENDER_X_MARGIN:04X}
     BCS wbr_next
 wbr_ycheck:
     LDA $06,X
@@ -646,9 +661,9 @@ wbr_sloop:
     LDA $02,X
     SEC
     SBC $1B6A
-    CMP #${(0x10000 - SPRITE_MARGIN) & 0xFFFF:04X}
-    BCS wbr_sycheck              ; left strip [-margin..-1]
-    CMP #${0x0100 + SPRITE_MARGIN:04X}
+    CMP #${(0x10000 - RENDER_X_MARGIN) & 0xFFFF:04X}
+    BCS wbr_sycheck              ; left strip plus one tile of sprite offset
+    CMP #${0x0100 + RENDER_X_MARGIN:04X}
     BCS wbr_snext                ; far right
 wbr_sycheck:
     LDA $06,X
@@ -742,33 +757,6 @@ wbr_clear_loop:
     PLD
     RTL
 
-; ================= SPRITE X-CULL RELAX (widescreen strips) =================
-; Replaces the OAM-build engine's X-cull range test (4 sites). Called via JSL with
-; A = sprite screen-X (16-bit), in the engine's M=16 state. Returns:
-;   carry SET   -> cull this sprite (truly off-screen past the strips)
-;   carry CLEAR -> draw; A=0 (Z=1) on-screen no high bit, A=1 (Z=0) strip -> set high
-; Each call site keeps its own original "set X-high" bytes (ORA vs EOR), run only when
-; A!=0, so a strip sprite (X>=256 or X<0) gets its X-high bit and bsnes-hd renders it
-; in the strip. Display-only: the helper touches no memory; sites touch only OAM.
-ws_sprite_cull:
-    CMP #$0100
-    BCC wsc_nohigh              ; [0,255] on-screen, no high bit
-    CMP #${256 + SPRITE_MARGIN + 1:04X}
-    BCC wsc_high                ; right strip [256 .. 255+margin]
-    CMP #${(0x10000 - SPRITE_MARGIN) & 0xFFFF:04X}
-    BCC wsc_cull                ; truly off-screen -> cull
-wsc_high:                       ; right strip, or left strip [-margin..-1]
-    CLC
-    LDA #$0001
-    RTL
-wsc_nohigh:
-    CLC
-    LDA #$0000
-    RTL
-wsc_cull:
-    SEC
-    RTL
-
 ; ================= CAMERA EDGE CLAMP (widescreen strips) =================
 ; Let the stock horizontal camera edge lock happen earlier so bsnes-hd's extra
 ; columns mostly land inside the level map at the left/right edges. Any truly
@@ -796,15 +784,35 @@ wsr_continue:
     JML $80A712
 """
 
+CULL_SOURCE = f"""
+; Fast same-bank helper for widened strip sprite culling. The call sites keep the
+; stock CMP #$0100 / BCC draw fast path, so this only runs for X >= 256 or negative.
+ws_sprite_cull_offscreen:
+    CMP #${256 + SPRITE_MARGIN + 1:04X}
+    BCC wsc_fast_high           ; right strip [256 .. 255+margin]
+    CMP #${(0x10000 - SPRITE_MARGIN) & 0xFFFF:04X}
+    BCC wsc_fast_cull           ; truly off-screen before the left strip
+wsc_fast_high:
+    CLC
+    RTS
+wsc_fast_cull:
+    SEC
+    RTS
+"""
+
 
 def main() -> int:
     code, labels = asm.assemble(SOURCE, ORG)
+    cull_code, cull_labels = asm.assemble(CULL_SOURCE, CULL_FAST_ORG)
     limit = BLACK_TILE_SRC - (ORG & 0xFFFF)  # reserve $8F:D2E0..D2FF for the black tile graphics
     if len(code) > limit:
         raise SystemExit(f"routine too large: {len(code)} bytes > {limit} free before black tile data")
 
     base = (ROOT / build.DEFAULT_ROM).read_bytes()
     rom = build.patch_rom(base)
+    cull_orig = bytes(rom[CULL_FAST_FILE:CULL_FAST_FILE + len(cull_code)])
+    if cull_orig != b"\xFF" * len(cull_code):
+        raise SystemExit(f"bank-80 fast cull pocket not free at 0x{CULL_FAST_FILE:05X}: {cull_orig.hex(' ')}")
 
     def patch(file_off, expect_hex, target_addr):
         orig = bytes(rom[file_off:file_off + 4])
@@ -819,6 +827,7 @@ def main() -> int:
     patch(0x268B, "AD 6A 1B F0", labels["ws_scroll_left_guard"])   # $80:A68B
     patch(0x270A, "AD 6A 1B C5", labels["ws_scroll_right_guard"])  # $80:A70A
     rom[ROUTINE_FILE:ROUTINE_FILE + len(code)] = code
+    rom[CULL_FAST_FILE:CULL_FAST_FILE + len(cull_code)] = cull_code
     rom[BLACK_TILE_FILE:BLACK_TILE_FILE + len(BLACK_TILE_BYTES)] = BLACK_TILE_BYTES
 
     # Replace JSR $BCE2 / JSR $BC23 in the sprite engine with one long helper that
@@ -850,13 +859,13 @@ def main() -> int:
     # The map-object scanner is a cooperative task and stock only runs the proximity
     # pass when ($20 & 3) == 0. With a wider leading edge, that cadence can still let
     # old/mid-cycle states pop an object at the 4:3 edge before the next pass reaches
-    # it. Keep the task's yield points, but remove the tick modulo so each wake can
-    # perform the widened proximity pass.
+    # it. Keep the stock cadence and task yield points; the widened display culls
+    # below keep far-off active actors from paying the OAM-build cost.
     object_scan_cadence_off = 0x4918  # $80:C918  LDA $20 / AND #$0003 / BNE $C90A
     orig = bytes(rom[object_scan_cadence_off:object_scan_cadence_off + 8])
     if orig != bytes.fromhex("AD 20 00 29 03 00 D0 EA"):
         raise SystemExit(f"unexpected object scan cadence bytes at 0x{object_scan_cadence_off:05X}: {orig.hex(' ')}")
-    rom[object_scan_cadence_off + 4:object_scan_cadence_off + 6] = b"\x00\x00"
+    rom[object_scan_cadence_off + 4:object_scan_cadence_off + 6] = OBJECT_SCAN_MASK.to_bytes(2, "little")
 
     # Victims/neighbors use a separate bank-$81 definition scanner. It compares
     # abs(victimX - (camX+$80)) against $00A0, which makes left-side victims spawn
@@ -871,11 +880,12 @@ def main() -> int:
         raise SystemExit(f"victim activation threshold too large: 0x{victim_threshold:04X}")
     rom[victim_x_gate_off + 1:victim_x_gate_off + 3] = victim_threshold.to_bytes(2, "little")
 
-    # --- sprite X-cull relax: route the 4 OAM-build cull sites through ws_sprite_cull ---
+    # --- sprite X-cull relax: keep the stock on-screen fast path, route only
+    # offscreen/strip candidates through a same-bank JSR helper in free bank-$80 space.
     # Original 22 bytes: CMP #$0100 / BCC draw / CMP #$FFF1 / BCC cull / set-X-high(12).
     # New 22 bytes, keeping each site's own set-high (sites 1-3 ORA, site 4 EOR):
-    #   JSL ws_sprite_cull ; BCS cull ; BEQ draw(+$0E) ; <original set-high 12B> ; NOP NOP
-    helper = labels["ws_sprite_cull"]
+    #   CMP #$0100 ; BCC draw ; JSR helper ; BCS cull ; <original set-high 12B>
+    helper = cull_labels["ws_sprite_cull_offscreen"] & 0xFFFF
     # (file_off, snes_addr, cull_target) for the four sites
     sprite_sites = [
         (0x3A74, 0xBA74, 0xBAAB),
@@ -893,11 +903,12 @@ def main() -> int:
               and set_high[7:12] == bytes.fromhex("BE1399BE13"))
         if not ok:
             raise SystemExit(f"unexpected sprite-cull bytes at 0x{foff:05X}: {orig.hex(' ')}")
-        rel = cull - (snes + 6)        # BCS operand at snes+4, measured from snes+6
+        rel = cull - (snes + 10)       # BCS operand at snes+8, measured from snes+10
         if not 0 <= rel <= 0x7F:
             raise SystemExit(f"sprite-cull BCS out of range at 0x{foff:05X}: {rel}")
-        new = bytes([0x22, helper & 0xFF, (helper >> 8) & 0xFF, (helper >> 16) & 0xFF,
-                     0xB0, rel, 0xF0, 0x0E]) + set_high + b"\xEA\xEA"
+        new = bytes.fromhex("C9 00 01 90 11") + bytes([
+            0x20, helper & 0xFF, (helper >> 8) & 0xFF,
+            0xB0, rel]) + set_high
         assert len(new) == 22
         rom[foff:foff + 22] = new
 
@@ -921,10 +932,10 @@ def main() -> int:
     print(f"gather_entry  : ${labels['gather_entry']:06X}")
     print(f"g_slot        : ${labels['g_slot']:06X}")
     print(f"enqueue_entry : ${labels['enqueue_entry']:06X}")
-    print(f"ws_sprite_cull: ${labels['ws_sprite_cull']:06X}  (4 cull sites, margin {SPRITE_MARGIN}px)")
+    print(f"ws_sprite_cull: ${cull_labels['ws_sprite_cull_offscreen']:06X}  (4 fast JSR sites, margin {SPRITE_MARGIN}px)")
     print(f"camera clamp  : $80:A68B/$A70A  left {CAMERA_LEFT_MARGIN}px, right {CAMERA_RIGHT_MARGIN}px")
     print(f"object X gate : $80:C948  threshold ${object_threshold:04X} (stock $0090)")
-    print("object scanner: $80:C91C  every wake (stock every 4 ticks)")
+    print(f"object scanner: $80:C91C  mask ${OBJECT_SCAN_MASK:04X} (stock $0003)")
     print(f"victim X gate : $81:823C  threshold ${victim_threshold:04X} (stock $00A0)")
     print(f"test ROM      : {out_rom}")
     print(f"widescreen IPS: {out_ips} ({len(ips)} bytes)")
