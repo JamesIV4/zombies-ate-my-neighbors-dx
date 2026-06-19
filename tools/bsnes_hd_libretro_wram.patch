@@ -1,7 +1,11 @@
 diff --git a/bsnes/target-libretro/libretro.cpp b/bsnes/target-libretro/libretro.cpp
 --- a/bsnes/target-libretro/libretro.cpp
 +++ b/bsnes/target-libretro/libretro.cpp
-@@
+@@ -1123,15 +1123,17 @@ unsigned retro_get_region()
+ {
+ 	return program->superFamicom.region == "NTSC" ? RETRO_REGION_NTSC : RETRO_REGION_PAL;
+ }
+ 
 -// Currently, there is no safe/sensible way to use the memory interface without severe hackery.
 -// Rely on higan to load and save SRAM until there is really compelling reason not to.
  void *retro_get_memory_data(unsigned id)
@@ -20,9 +24,75 @@ diff --git a/bsnes/target-libretro/libretro.cpp b/bsnes/target-libretro/libretro
 diff --git a/bsnes/target-libretro/program.cpp b/bsnes/target-libretro/program.cpp
 --- a/bsnes/target-libretro/program.cpp
 +++ b/bsnes/target-libretro/program.cpp
-@@
+@@ -1,5 +1,6 @@
  #include <emulator/emulator.hpp>
 -#include <sfc/interface/interface.hpp>
 +#include <sfc/sfc.hpp>
 +#undef platform
  #include <filter/filter.hpp>
+ #include <lzma/lzma.hpp>
+ #include <nall/directory.hpp>
+diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.cpp
+--- a/bsnes/sfc/ppu-fast/background.cpp
++++ b/bsnes/sfc/ppu-fast/background.cpp
+@@ -1,9 +1,49 @@
+ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> void {
+   if(!self.aboveEnable && !self.belowEnable) return;
+   if(self.tileMode == TileMode::Mode7) return renderMode7(self, source);
+   if(self.tileMode == TileMode::Inactive) return;
+ 
+   uint wsConf = ppufast.wsbg(source);
++  bool zamnKonamiBar = false;
++  if(io.bgMode == 1) {
++    // ZAMN-DX widescreen: startup UI scenes reuse BG layers differently than gameplay.
++    // Key off live VRAM bases/contents so gameplay keeps the normal bundled defaults.
++    if(source == Source::BG3 && self.screenAddress == 0x6400 && self.tiledataAddress == 0x4000) {
++      uint16 firstCell = ppu.vram[ppu.vramExt(self.screenAddress)];
++      if(firstCell == 0x1c00) wsConf = 0;             // title/intro slate: keep 4:3
++      else {
++        for(uint offset = 0; offset < 32; offset++) {
++          if(ppu.vram[ppu.vramExt(self.screenAddress + offset)] != 0x0000) {
++            wsConf = 1;                               // animation/menu/character select: widen BG3
++            break;
++          }
++        }
++      }
++    }
++    if(source == Source::BG3 && self.screenAddress == 0x6400 && self.tiledataAddress == 0x2000) {
++      wsConf = 1;                                     // save/select UI layer 3 fills the strips
++    }
++    if(source == Source::BG2 && self.screenAddress == 0x6000 && self.tiledataAddress == 0x0000) {
++      wsConf = 0;                                     // Konami logo should not repeat in the strips
++    }
++    if(source == Source::BG2 && self.screenAddress == 0x7000 && self.tiledataAddress == 0x2000) {
++      wsConf = 0;                                     // character-select BG2 repeats in strips
++    }
++    if(source == Source::BG1 && self.screenAddress == 0x6800) {
++      if(self.tiledataAddress == 0x5000) {
++        bool mainMenu = ppu.vram[ppu.vramExt(0x6400 + 13)] == 0x0002
++                     && ppu.vram[ppu.vramExt(0x6400 + 14)] == 0x0004
++                     && ppu.vram[ppu.vramExt(0x6400 + 15)] == 0x4004
++                     && ppu.vram[ppu.vramExt(0x6400 + 16)] == 0x4002;
++        wsConf = mainMenu ? 1 : 0;                    // main menu BG1 is wide; character select stays 4:3
++      } else if(self.tiledataAddress == 0x2000) {
++        wsConf = 0;                                   // loading BG1 stays 4:3
++      }
++    }
++    zamnKonamiBar = source == Source::BG1 && self.screenAddress == 0x4000
++                 && self.tiledataAddress == 0x0000 && self.tileMode == TileMode::BPP4;
++    if(zamnKonamiBar) wsConf = 1;                       // Konami logo bar should fill the strips
++  }
+   if(wsConf == 14) {
+     return;
+   }
+@@ -103,7 +143,10 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+     hoffset &= hmask;
+     voffset &= vmask;
+ 
+     uint tileNumber = getTile(self, hoffset, voffset);
++    if(zamnKonamiBar && (voffset >> tileHeight) == 1 && (x < 0 || x >= 16 * 8)) {
++      tileNumber = ppu.vram[ppu.vramExt(self.screenAddress + 0x20 + 15)];
++    }
+     uint mirrorY = tileNumber & 0x8000 ? 7 : 0;
+     uint mirrorX = tileNumber & 0x4000 ? 7 : 0;
+     uint8 tilePriority = self.priority[bool(tileNumber & 0x2000)];

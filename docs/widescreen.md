@@ -65,10 +65,25 @@ ZAMN-DX therefore ships a repo-owned patched copy of `bsnes_hd_beta_libretro.dll
 as `mod/bsnes_hd_beta_zamndx_libretro.dll`. The release builder copies that exact
 binary into `runtime/BizHawk/Libretro/Cores/`.
 
-The bundled core also applies `tools/bsnes_hd_libretro_wram.patch`, which exposes
-SNES WRAM through libretro `RETRO_MEMORY_SYSTEM_RAM`. BizHawk turns that into its
-`mainmemory` domain, allowing the existing Lua twin-stick runtime to write the
-ZAMN-DX controller mailbox while widescreen is running through bsnes-hd.
+The bundled core also applies `tools/bsnes_hd_libretro_wram.patch`. That patch
+exposes SNES WRAM through libretro `RETRO_MEMORY_SYSTEM_RAM` and adds ZAMN-DX
+startup/menu renderer guards for the reused tilemaps. BizHawk turns the WRAM
+export into its `mainmemory` domain, allowing the existing Lua twin-stick runtime
+to write the ZAMN-DX controller mailbox while widescreen is running through
+bsnes-hd.
+
+The renderer guards are keyed from live PPU layer bases and VRAM contents:
+
+| Scene signature | Override |
+|---|---|
+| BG1 `$4000/$0000` 4bpp Konami logo bar | force wide and repeat row-1 col-15 over the bad/right-side bar cells |
+| BG2 `$6000/$0000` Konami logo | keep 4:3 so the logo does not repeat in the strips |
+| BG3 `$6400/$4000` 2bpp, first cell not `$1C00` and first row has nonzero cells | force wide for startup animation, main menu, and character select text |
+| BG3 `$6400/$4000` 2bpp, first cell `$1C00` | keep 4:3 for the title/intro slate |
+| BG3 `$6400/$2000` 2bpp | force wide for the save/select UI |
+| BG1 `$6800/$5000` with BG3 row-0 menu marker at cols 13-16 | force wide for the main menu |
+| BG1 `$6800/$5000` without the menu marker, or `$6800/$2000` | keep 4:3 for character select/loading screens |
+| BG2 `$7000/$2000` | keep 4:3 for character select |
 
 The patched bsnes-hd defaults are:
 
@@ -425,7 +440,7 @@ screens are left untouched.
 | `tools/asm65816.py` | Minimal two-pass 65816 **assembler** (labels, all addressing modes). Validated by round-trip through the disassembler. |
 | `tools/diagnostics/re65816.py` | 65816 **disassembler** + PPU/DMA register-write **scanner**. `dis bb:aaaa N`, `scan`, `--rom`. |
 | `tools/build_widescreen.py` | Assembles the hook, applies both trampolines + the routine to the DX ROM, fixes checksum, emits `mod/widescreen.ips` and a ready test ROM. |
-| `tools/build_bsnes_hd_core.py` | Patches an upstream bsnes-hd libretro DLL's core-option defaults to produce the repo-owned ZAMN-DX core DLL. Release builds do not download or regenerate this automatically. |
+| `tools/build_bsnes_hd_core.py` | Patches a bsnes-hd libretro DLL's core-option defaults to produce the repo-owned ZAMN-DX core DLL. The source DLL must already include `tools/bsnes_hd_libretro_wram.patch`; release builds do not download or regenerate this automatically. |
 | `tools/diagnostics/mesen_wram_probe.lua` | Dumps live WRAM (found map extent + free scratch). |
 | `tools/diagnostics/mesen_ws_trace.lua` | Stability/scroll trace (catches hangs, logs camera). |
 | `tools/diagnostics/mesen_ws_verify.lua` | BG data-correctness check (colbuf ↔ map ↔ VRAM). |
@@ -434,6 +449,7 @@ screens are left untouched.
 | `tools/diagnostics/mesen_offmap_black_verify.lua` | Verifies true off-map strip columns upload opaque black `$227F` to colbuf and VRAM on both horizontal clamped edges (level 1). |
 | `tools/diagnostics/mesen_gameplay_black_probe.lua` | **Gameplay** black calibration: plays the level-2 savestate (or boots to level 1, `MODE`) forward into settled gameplay and dumps CGRAM, BG char bases, and free/unused BG1 tile slots. Found char base `$5000`, `CGRAM $08` black, free tile `$27F`. |
 | `tools/diagnostics/mesen_black_fix_verify.lua` | End-to-end fix check: off-map cells `$227F` + solid color-8 tile at `$77F0` + `CGRAM $08==0` during gameplay, **and** zero bank-`$8F` black-fill DMAs across all non-gameplay (loading) drains. |
+| `tools/diagnostics/mesen_startup_ui_probe.lua` | Loads Mesen startup/menu save slots 1-7 and dumps the BG layer bases plus involved VRAM tilemap rows, used to key the bsnes-hd startup renderer guards. |
 | `tools/diagnostics/_scan_bgnba.py` | ROM scan for `$2105/$210B/$210D/$2107` writes (found gameplay `$210B=$25` → BG1 char base `$5000`). |
 | `tools/diagnostics/mesen_level2_load_probe.lua` | *(superseded)* Loaded the user level-2 savestate to verify the old load-state black fill — that path was removed (it clobbered the loading text). |
 | `tools/diagnostics/mesen_blank_tile_scan.lua` | *(superseded — sampled the load screen)* Palette/tile scan that first (mis)concluded palette 2 color `$A` was black; see §6 bug 11. |
