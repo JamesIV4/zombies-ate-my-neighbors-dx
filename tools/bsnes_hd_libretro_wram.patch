@@ -35,7 +35,7 @@ diff --git a/bsnes/target-libretro/program.cpp b/bsnes/target-libretro/program.c
 diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.cpp
 --- a/bsnes/sfc/ppu-fast/background.cpp
 +++ b/bsnes/sfc/ppu-fast/background.cpp
-@@ -1,9 +1,49 @@
+@@ -1,9 +1,54 @@
  auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> void {
    if(!self.aboveEnable && !self.belowEnable) return;
    if(self.tileMode == TileMode::Mode7) return renderMode7(self, source);
@@ -43,17 +43,22 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
  
    uint wsConf = ppufast.wsbg(source);
 +  bool zamnKonamiBar = false;
++  bool zamnGameplayHud = false;
 +  if(io.bgMode == 1) {
 +    // ZAMN-DX widescreen: startup UI scenes reuse BG layers differently than gameplay.
 +    // Key off live VRAM bases/contents so gameplay keeps the normal bundled defaults.
 +    if(source == Source::BG3 && self.screenAddress == 0x6400 && self.tiledataAddress == 0x4000) {
-+      uint16 firstCell = ppu.vram[ppu.vramExt(self.screenAddress)];
-+      if(firstCell == 0x1c00) wsConf = 0;             // title/intro slate: keep 4:3
++      zamnGameplayHud = cpu.wram[0x000e] == 0x02 && cpu.wram[0x0d25] != 0;
++      if(zamnGameplayHud) wsConf = 1;                 // gameplay HUD: anchor 256px layer to the left edge
 +      else {
-+        for(uint offset = 0; offset < 32; offset++) {
-+          if(ppu.vram[ppu.vramExt(self.screenAddress + offset)] != 0x0000) {
-+            wsConf = 1;                               // animation/menu/character select: widen BG3
-+            break;
++        uint16 firstCell = ppu.vram[ppu.vramExt(self.screenAddress)];
++        if(firstCell == 0x1c00) wsConf = 0;           // title/intro slate: keep 4:3
++        else {
++          for(uint offset = 0; offset < 32; offset++) {
++            if(ppu.vram[ppu.vramExt(self.screenAddress + offset)] != 0x0000) {
++              wsConf = 1;                             // animation/menu/character select: widen BG3
++              break;
++            }
 +          }
 +        }
 +      }
@@ -85,7 +90,24 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
    if(wsConf == 14) {
      return;
    }
-@@ -103,7 +143,10 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+@@ -53,6 +98,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+   uint vscroll = self.voffset;
+   uint hmask = (width << self.tileSize << !!(self.screenSize & 1)) - 1;
+   uint vmask = (width << self.tileSize << !!(self.screenSize & 2)) - 1;
++  uint zamnHudLeftOffset = zamnGameplayHud ? ppufast.widescreen() : 0;
+ 
+   uint y = this->y;
+   if(self.mosaicEnable) y -= io.mosaic.size - io.mosaic.counter;
+@@ -73,7 +119,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+   bool lastCropped = false;
+   int x = 0 - (hscroll & 7) - ws;
+   while(x < (width + ws)) {
+-    uint hoffset = x + hscroll;
++    uint hoffset = x + hscroll + zamnHudLeftOffset;
+     uint voffset = y + vscroll;
+     if(offsetPerTileMode) {
+       uint validBit = 0x2000 << source;
+@@ -103,7 +149,10 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
      hoffset &= hmask;
      voffset &= vmask;
  
@@ -96,3 +118,11 @@ diff --git a/bsnes/sfc/ppu-fast/background.cpp b/bsnes/sfc/ppu-fast/background.c
      uint mirrorY = tileNumber & 0x8000 ? 7 : 0;
      uint mirrorX = tileNumber & 0x4000 ? 7 : 0;
      uint8 tilePriority = self.priority[bool(tileNumber & 0x2000)];
+@@ -124,6 +173,7 @@ auto PPU::Line::renderBackground(PPU::IO::Background& self, uint8 source) -> voi
+ 
+     for(uint tileX = 0; tileX < 8; tileX++, x++) {
+       if(x < -ws || x >= width + ws) continue;   //if(x & width) continue;  //x < 0 || x >= width
++      if(zamnGameplayHud && x + (int)zamnHudLeftOffset >= (int)width) continue;
+       if(--mosaicCounter == 0) {
+         uint color, shift = mirrorX ? tileX : 7 - tileX;
+       /*if(self.tileMode >= TileMode::BPP2)*/ {
