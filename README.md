@@ -4,9 +4,7 @@
 
 This emulator-only mod for the USA SNES release adds:
 
-- **Widescreen**: an extended playfield rendered through a modified
-  ZAMN-DX BSNES-HD libretro core. A custom ROM hook streams real side-strip terrain and
-  widens the sprite culls so actors, items, and neighbors appear across the wider view.
+- **Widescreen**: an extended playfield rendered through a modified BSNES-HD libretro core. A custom ROM hook streams level data into the side strips and widens the sprite culls so enemies, neighbors and items appear across the wider view.
 - True analog movement, speed and direction, on the left stick.
 - Independent right-stick aiming and firing in the game's eight native shot directions.
 - 50% larger sprite interaction hitboxes, so picking up items and hitting enemies is more consistent.
