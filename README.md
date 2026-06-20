@@ -19,11 +19,7 @@ censored red blood on the Game Over screen
 weapons and items in both directions and enables a reworked control layout
 - **Battery Save** (["SNESRAM" hack #7312](https://www.romhacking.net/hacks/7312/)): saves the game after each level. Load by using an empty password
 
-The ROM patch retains the original wall collision, enemy, item, camera, tile,
-and weapon code. The controller layer translates analog input into per-frame
-movement deltas and writes them, plus the requested aim direction, to reserved
-upper WRAM. Small ROM hooks apply movement before the original collision and
-coordinate commit logic, and aiming immediately before the firing logic.
+The ROM patch retains the original gameplay behavior of the game, beyond tweaking the camera for widescreen and the hitboxes of items. Enemies still spawn and behave like the 4:3 version.
 
 ## Gameplay Video
 
