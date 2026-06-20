@@ -21,8 +21,8 @@ weapons and items in both directions and enables a reworked control layout
 
 The ROM patch retains the original gameplay behavior of the game, beyond tweaking the camera for widescreen and the hitboxes of items. Enemies still spawn and behave like the 4:3 version.
 
-## Gameplay Video
-
+## Gameplay Videos
+[![Zombies Ate My Neighbors DX](https://img.youtube.com/vi/rgxnbItSN1g/0.jpg)](https://www.youtube.com/watch?v=rgxnbItSN1g)
 [![Zombies Ate My Neighbors DX](https://img.youtube.com/vi/F1pOwoPr5Lw/0.jpg)](https://www.youtube.com/watch?v=F1pOwoPr5Lw)
 
 ## Quick Start
